@@ -37,7 +37,11 @@ simplefold_image = (
         "pip install 'git+https://github.com/facebookresearch/esm.git'",
         "simplefold --help",
     )
-    .env({"HF_HOME": _MODEL_CACHE, "TORCH_HOME": _MODEL_CACHE})
+    .env({
+        "HF_HOME": _MODEL_CACHE,
+        "TORCH_HOME": _MODEL_CACHE,
+        "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+    })
 )
 
 
@@ -97,10 +101,10 @@ def setup_weights(model: str = "simplefold_100M"):
 
 @app.function(
     image=simplefold_image,
-    gpu="T4",
+    gpu="A10G",             # 24 GB VRAM — T4 (16 GB) OOMs on simplefold_100M + pLDDT
     timeout=600,
     retries=1,
-    memory=8192,
+    memory=16384,
     volumes={_MODEL_CACHE: model_vol},
 )
 def fold_protein_modal(
