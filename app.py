@@ -1413,16 +1413,25 @@ with tab_how:
          "ESM-2 (Meta AI, 3B params) reads the sequence and emits a per-residue embedding that "
          "captures evolutionary context inferred from ~65M natural sequences. This embedding is "
          "the substrate every modern protein folder builds on."),
-        ("03", "Flow-matching diffusion",
-         "SimpleFold (Apple, 2025) starts from random 3D coordinates and iteratively denoises them, "
-         "conditioned on the ESM embedding, over N steps (default 200). Unlike AlphaFold's iterative "
-         "MSA refinement, SimpleFold's flow-matching diffusion is faster per step and runs comfortably "
-         "on a single GPU. Output: per-atom coordinates in PDB format."),
+        ("03", "Flow matching",
+         "SimpleFold (Apple, 2025) uses conditional flow matching — not diffusion. It learns a vector "
+         "field that continuously moves a Gaussian noise cloud toward the protein's true 3D structure "
+         "via an ODE, over N steps (default 200). Unlike AlphaFold's MSA-based Evoformer, SimpleFold "
+         "conditions entirely on the ESM embedding and requires no multiple sequence alignment. "
+         "Output: per-atom coordinates in PDB format."),
         ("04", "Confidence + explanation",
-         "A pLDDT confidence head scores each residue's local accuracy (0–100, stored in the "
-         "B-factor column of the PDB). Venice AI then composes a domain-appropriate explanation — "
-         "Scientific for researchers, MSL for medical-affairs — using your computed sequence stats "
-         "as authoritative ground truth (the LLM cannot fabricate MW, pI, or motif hits)."),
+         "A pLDDT head scores each residue 0–100. pLDDT stands for predicted Local Distance "
+         "Difference Test. The lDDT metric works by picking one residue, drawing a 15 Å sphere "
+         "around it, and checking every pairwise distance inside that sphere against the true "
+         "experimental structure — the score is the fraction of distances that match within "
+         "0.5 / 1 / 2 / 4 Å thresholds. The model can't run that check (there's no true structure "
+         "to compare to), so instead it predicts what its own lDDT score would be — hence "
+         "predicted lDDT. High scores mean the local atomic neighbourhood is tightly packed and "
+         "self-consistent; low scores flag regions the model couldn't constrain (usually loops, "
+         "disordered tails, or very short sequences). Scores are saved in the PDB B-factor column "
+         "and shown as the per-residue heatmap. Venice AI then writes a domain-appropriate "
+         "explanation using your computed sequence stats as ground truth so the LLM cannot "
+         "fabricate MW, pI, or motif hits."),
     ]
     how_cols = st.columns(4, gap="large")
     for col, (num, title, body) in zip(how_cols, how_steps):
