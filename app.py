@@ -310,9 +310,120 @@ st.markdown(
 
       /* Footer */
       .pl-footer {{
-        text-align:center; padding: 3rem 1rem 1.5rem 1rem;
-        color: {INK_3}; font-size: 0.82rem;
-        border-top: 1px solid {RULE}; margin-top: 4rem;
+        text-align:center; padding: 2rem 1rem 1rem 1rem;
+        color: {INK_3}; font-size: 0.78rem;
+        border-top: 1px solid {RULE}; margin-top: 3rem;
+      }}
+
+      /* ── Dashboard tiles ── */
+      .pl-tile {{
+        background: {PAPER_2}; border: 1px solid {RULE};
+        border-radius: 12px; padding: 1.1rem 1.2rem;
+        display:flex; flex-direction:column; gap: 0.35rem;
+      }}
+      .pl-tile-label {{
+        font-family: 'JetBrains Mono', monospace; font-size: 0.7rem;
+        color: {INK_3}; letter-spacing: 0.08em; text-transform: uppercase;
+      }}
+      .pl-tile-value {{
+        font-family: 'EB Garamond', serif; font-size: 1.9rem;
+        color: {INK}; font-weight: 500; line-height: 1.1;
+      }}
+      .pl-tile-unit {{
+        font-family: 'JetBrains Mono', monospace; font-size: 0.78rem;
+        color: {INK_3}; margin-left: 0.3rem;
+      }}
+      .pl-tile-bar {{
+        margin-top: 0.4rem; height: 3px; background: {RULE};
+        border-radius: 2px; overflow: hidden;
+      }}
+      .pl-tile-bar-fill {{ height: 100%; }}
+      .pl-tile-hint {{
+        font-size: 0.75rem; color: {INK_3}; line-height: 1.4;
+      }}
+
+      /* ── Donut chart (CSS conic-gradient) ── */
+      .pl-donut-wrap {{
+        display:flex; align-items:center; gap: 1.5rem;
+      }}
+      .pl-donut {{
+        width: 160px; height: 160px; border-radius: 50%;
+        position: relative; flex-shrink: 0;
+      }}
+      .pl-donut::after {{
+        content: ""; position: absolute; inset: 30%;
+        background: {PAPER_2}; border-radius: 50%;
+      }}
+      .pl-donut-center {{
+        position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+        font-family: 'EB Garamond', serif; font-size: 1.4rem; color: {INK};
+        z-index: 1; text-align: center;
+      }}
+      .pl-donut-center span {{
+        display:block; font-family: 'JetBrains Mono', monospace;
+        font-size: 0.65rem; color: {INK_3}; letter-spacing: 0.05em;
+      }}
+      .pl-donut-legend {{ display:flex; flex-direction:column; gap: 0.4rem; flex: 1; }}
+      .pl-donut-legend-row {{
+        display:flex; align-items:center; gap: 0.6rem; font-size: 0.84rem;
+      }}
+      .pl-donut-swatch {{
+        width: 12px; height: 12px; border-radius: 2px; flex-shrink: 0;
+      }}
+      .pl-donut-label {{ flex: 1; color: {INK_2}; }}
+      .pl-donut-pct {{
+        font-family: 'JetBrains Mono', monospace; color: {INK};
+        font-size: 0.82rem;
+      }}
+
+      /* ── Motif map ── */
+      .pl-motif-track {{
+        position: relative; height: 28px; background: {RULE}; border-radius: 4px;
+        margin: 0.6rem 0;
+      }}
+      .pl-motif-marker {{
+        position: absolute; top: 0; height: 100%;
+        background: {ACCENT}; border-radius: 3px; opacity: 0.78;
+        min-width: 4px;
+      }}
+      .pl-motif-axis {{
+        display:flex; justify-content:space-between;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.7rem; color: {INK_3};
+      }}
+
+      /* ── Info "?" toggle button ── */
+      .pl-info-btn {{
+        display:inline-flex; align-items:center; justify-content:center;
+        width: 16px; height: 16px; border-radius: 50%;
+        background: {RULE}; color: {INK_2};
+        font-size: 0.7rem; font-weight: 600; cursor: help;
+        margin-left: 0.4rem; user-select: none;
+        font-family: 'JetBrains Mono', monospace;
+      }}
+      .pl-info-btn:hover {{ background: {INK}; color: {PAPER_2}; }}
+
+      /* Tabs (main level, larger) */
+      .pl-tabs-wrap .stTabs [data-baseweb="tab-list"] {{
+        gap: 0; border-bottom: 1px solid {RULE};
+      }}
+      .pl-tabs-wrap .stTabs [data-baseweb="tab"] {{
+        font-family: 'EB Garamond', serif; font-size: 1.15rem;
+        padding: 0.7rem 1.4rem; color: {INK_3};
+      }}
+      .pl-tabs-wrap .stTabs [aria-selected="true"] {{
+        color: {INK} !important; border-bottom: 2px solid {ACCENT} !important;
+      }}
+
+      /* Section heading inside dashboard */
+      .pl-section-eyebrow {{
+        font-family: 'JetBrains Mono', monospace; font-size: 0.72rem;
+        color: {INK_3}; letter-spacing: 0.1em; text-transform: uppercase;
+        margin-top: 2rem; margin-bottom: 0.5rem;
+      }}
+      .pl-section-title {{
+        font-family: 'EB Garamond', serif; font-size: 1.5rem;
+        font-weight: 500; color: {INK}; margin: 0 0 1rem 0;
       }}
     </style>
     """,
@@ -434,6 +545,137 @@ def _img_data_uri(path: str) -> Optional[str]:
         return None
     with open(path, "rb") as f:
         return "data:image/png;base64," + base64.b64encode(f.read()).decode()
+
+
+# ── Dashboard rendering helpers ────────────────────────────────────────────────
+
+# Stable palette for the 6 AA categories — chosen for distinguishability in print
+CATEGORY_COLORS: dict[str, str] = {
+    "hydrophobic":     "#5b8c5a",
+    "polar_uncharged": "#c4a35a",
+    "positive":        "#4a7ba6",
+    "negative":        "#b85a5a",
+    "aromatic":        "#7a5a8a",
+    "special":         "#7d7d75",
+}
+CATEGORY_LABELS: dict[str, str] = {
+    "hydrophobic":     "Hydrophobic (AVILM)",
+    "polar_uncharged": "Polar uncharged (STNQ)",
+    "positive":        "Positively charged (KRH)",
+    "negative":        "Negatively charged (DE)",
+    "aromatic":        "Aromatic (FYW)",
+    "special":         "Special (C/G/P)",
+}
+
+
+def render_vital_tile(label: str, value: str, hint: str = "", bar_pct: Optional[float] = None,
+                      bar_color: str = "#1a1a1a", unit: str = "") -> str:
+    bar = ""
+    if bar_pct is not None:
+        pct = max(0, min(100, bar_pct))
+        bar = (f'<div class="pl-tile-bar">'
+               f'<div class="pl-tile-bar-fill" style="width:{pct:.0f}%;background:{bar_color};"></div>'
+               f'</div>')
+    unit_html = f'<span class="pl-tile-unit">{html.escape(unit)}</span>' if unit else ""
+    hint_html = f'<div class="pl-tile-hint">{html.escape(hint)}</div>' if hint else ""
+    return (
+        f'<div class="pl-tile">'
+        f'<div class="pl-tile-label">{html.escape(label)}</div>'
+        f'<div class="pl-tile-value">{value}{unit_html}</div>'
+        f'{bar}{hint_html}'
+        f'</div>'
+    )
+
+
+def render_donut(category_pct: dict[str, float]) -> str:
+    items = [(k, category_pct.get(k, 0.0)) for k in CATEGORY_COLORS]
+    items = [(k, v) for k, v in items if v > 0]
+    if not items:
+        return ""
+    cum = 0.0
+    stops = []
+    for key, pct in items:
+        start = cum * 3.6
+        cum += pct
+        end = cum * 3.6
+        stops.append(f"{CATEGORY_COLORS[key]} {start:.1f}deg {end:.1f}deg")
+    grad = ", ".join(stops)
+    legend_rows = "".join(
+        f'<div class="pl-donut-legend-row">'
+        f'<span class="pl-donut-swatch" style="background:{CATEGORY_COLORS[k]};"></span>'
+        f'<span class="pl-donut-label">{CATEGORY_LABELS[k]}</span>'
+        f'<span class="pl-donut-pct">{v:.1f}%</span></div>'
+        for k, v in items
+    )
+    return (
+        f'<div class="pl-donut-wrap">'
+        f'<div class="pl-donut" style="background:conic-gradient({grad});">'
+        f'<div class="pl-donut-center">100%<span>composition</span></div>'
+        f'</div>'
+        f'<div class="pl-donut-legend">{legend_rows}</div>'
+        f'</div>'
+    )
+
+
+def render_motif_map(motifs: list[dict], seq_len: int) -> str:
+    if seq_len <= 0:
+        return ""
+    markers = []
+    for m in motifs[:30]:
+        left = (m["start"] / seq_len) * 100
+        width = max(0.4, ((m["end"] - m["start"]) / seq_len) * 100)
+        title = f"{m['name']} @ {m['start']+1}–{m['end']}  ({m['match']})"
+        markers.append(
+            f'<div class="pl-motif-marker" style="left:{left:.2f}%;width:{width:.2f}%;" '
+            f'title="{html.escape(title)}"></div>'
+        )
+    mid = max(1, seq_len // 2)
+    return (
+        f'<div class="pl-motif-track">{"".join(markers)}</div>'
+        f'<div class="pl-motif-axis">'
+        f'<span>1</span><span>{mid}</span><span>{seq_len}</span>'
+        f'</div>'
+    )
+
+
+def explainer(text: str) -> str:
+    """Render a small '?' bubble whose tooltip shows the explanation."""
+    safe = html.escape(text).replace("\n", "&#10;")
+    return f'<span class="pl-info-btn" title="{safe}">i</span>'
+
+
+# Reusable explainer texts — these surface when users hover the (i) badges
+TERM_EXPLAIN = {
+    "MW":
+        "Molecular weight in kilodaltons (kDa). Computed from the sum of average residue masses.",
+    "pI":
+        "Isoelectric point — the pH at which the protein carries no net electrical charge. "
+        "Affects solubility, migration in gels, and binding behavior.",
+    "charge":
+        "Net charge at pH 7, computed from the count of basic (K, R, H) minus acidic (D, E) residues "
+        "weighted by their pKa contributions.",
+    "gravy":
+        "Grand Average of Hydropathy — mean Kyte-Doolittle score across all residues. "
+        "Positive = overall hydrophobic, negative = overall polar.",
+    "aromaticity":
+        "Fraction of residues that are aromatic (F, W, Y). Drives UV absorbance at 280 nm and "
+        "stacking interactions inside the fold.",
+    "instability":
+        "Predicted in-vitro stability (Guruprasad et al., 1990). < 40 suggests a stable protein, "
+        "> 40 suggests one that may degrade quickly.",
+    "epsilon":
+        "Extinction coefficient at 280 nm, used to calculate protein concentration from UV "
+        "absorbance. Predicted from tryptophan + tyrosine + cystine content.",
+    "kyte_doolittle":
+        "Each amino acid is scored on a hydropathy scale (Ile/Val/Leu most hydrophobic; Lys/Arg "
+        "most polar). The sliding window plotted here highlights regions that prefer water (below 0) "
+        "vs membrane / hydrophobic cores (above 0). Peaks >1.6 over 9+ residues often mark "
+        "transmembrane helices or buried hydrophobic patches.",
+    "motifs":
+        "Short sequence patterns associated with known biology — phosphorylation sites, "
+        "glycosylation sequons, localization signals, etc. A hit suggests possible function but is "
+        "not proof — confirm experimentally.",
+}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -609,11 +851,25 @@ with st.sidebar:
 # Top nav (decorative)
 # ══════════════════════════════════════════════════════════════════════════════
 
+_SUNDAI_LOGO = os.path.join(os.path.dirname(__file__), "assets", "sundai_club.png")
+_sundai_uri = _img_data_uri(_SUNDAI_LOGO)
+_sundai_nav_html = (
+    f'<a href="https://sundai.club" target="_blank" '
+    f'style="display:flex;align-items:center;gap:0.55rem;text-decoration:none;color:{INK_3};">'
+    f'<img src="{_sundai_uri}" alt="Sundai Club" style="height:28px;opacity:0.9;"/>'
+    f'<span style="font-size:0.78rem;font-family:\'JetBrains Mono\',monospace;line-height:1.25;">'
+    f'developed at <strong style="color:{ACCENT};">SUNDAI CLUB</strong><br>'
+    f'<span style="color:{INK_3};opacity:0.75;">since May 2026</span></span></a>'
+    if _sundai_uri else
+    f'<a href="https://sundai.club" target="_blank" style="color:{INK_3};text-decoration:none;'
+    f'font-size:0.85rem;">developed at <strong style="color:{ACCENT};">SUNDAI CLUB</strong> · since May 2026</a>'
+)
+
 st.markdown(
     f"""
     <div class="pl-nav">
       <div class="brand"><span class="dot"></span>proteinlens</div>
-      <div class="meta" style="margin-left:auto;">{html.escape((st.session_state["protein_name"] or "unknown")[:32])}</div>
+      <div style="margin-left:auto;">{_sundai_nav_html}</div>
     </div>
     """,
     unsafe_allow_html=True,
@@ -812,7 +1068,7 @@ if fold_clicked:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Lower row — three cards (Scientific / Medical / Analytics)
+# Tabbed dashboard (Overview / Scientific / Medical / How it works)
 # ══════════════════════════════════════════════════════════════════════════════
 
 st.markdown("<div style='height:2.5rem;'></div>", unsafe_allow_html=True)
@@ -826,326 +1082,405 @@ if current_seq and len(current_seq) >= 10:
 else:
     stats, motifs, framing, hydro_profile = None, [], "", []
 
-card1, card2, card3 = st.columns(3, gap="large")
+st.markdown('<div class="pl-tabs-wrap">', unsafe_allow_html=True)
+tab_overview, tab_sci, tab_msl, tab_how = st.tabs(
+    ["Overview", "Scientific", "Medical Affairs", "How it works"]
+)
+st.markdown('</div>', unsafe_allow_html=True)
 
-with card1:
+
+# ── Tab 1: OVERVIEW (the dashboard) ───────────────────────────────────────────
+with tab_overview:
+
+    # At-a-glance vitals grid
+    st.markdown('<div class="pl-section-eyebrow">AT A GLANCE</div>'
+                '<div class="pl-section-title">Sequence vitals</div>',
+                unsafe_allow_html=True)
+
+    if stats:
+        tile_specs = [
+            ("Length",
+             f"{stats['length']}",
+             "AA",
+             None, INK,
+             "Number of amino acid residues."),
+            ("Molecular weight",
+             f"{stats['molecular_weight_kda']:.2f}",
+             "kDa",
+             min(100, stats['molecular_weight_kda'] / 1.5),
+             INK,
+             "Sum of residue masses + H2O."),
+            ("Isoelectric pt (pI)",
+             f"{stats['isoelectric_point']:.2f}",
+             "",
+             (stats['isoelectric_point'] / 14) * 100,
+             INK,
+             "pH where net charge = 0."),
+            ("Net charge @ pH 7",
+             f"{stats['net_charge_at_ph7']:+.1f}",
+             "",
+             None,
+             "#4a7ba6" if stats['net_charge_at_ph7'] > 0 else "#b85a5a",
+             "Sum of titratable side-chain charges at physiological pH."),
+            ("Hydropathy (GRAVY)",
+             f"{stats['gravy']:+.2f}",
+             "",
+             None,
+             "#b85a5a" if stats['gravy'] > 0 else "#4a7ba6",
+             "Mean Kyte-Doolittle hydropathy. > 0 hydrophobic, < 0 polar."),
+            ("Aromaticity",
+             f"{stats['aromaticity'] * 100:.1f}",
+             "%",
+             min(100, stats['aromaticity'] * 100 * 4),
+             "#7a5a8a",
+             "Fraction F + W + Y residues."),
+            ("Stability index",
+             f"{stats['instability_index']:.1f}",
+             "",
+             min(100, stats['instability_index']),
+             PLDDT_HI if stats['instability_index'] < 40 else PLDDT_LO,
+             "< 40 stable · > 40 unstable in vitro."),
+            ("ε280 (reduced)",
+             f"{stats['extinction_coefficient_280nm']:,}",
+             "M⁻¹·cm⁻¹",
+             None, INK,
+             "UV absorbance coefficient for concentration."),
+        ]
+        # 4-column grid
+        for row in (tile_specs[:4], tile_specs[4:]):
+            cols = st.columns(4, gap="medium")
+            for col, (label, val, unit, bar, color, hint) in zip(cols, row):
+                with col:
+                    st.markdown(
+                        render_vital_tile(label, val, hint=hint, bar_pct=bar,
+                                          bar_color=color, unit=unit),
+                        unsafe_allow_html=True,
+                    )
+
+        st.markdown(
+            f'<p style="margin-top:1.2rem;font-size:0.92rem;color:{INK_2};line-height:1.6;'
+            f'font-style:italic;padding:0 0.25rem;">{html.escape(framing)}</p>',
+            unsafe_allow_html=True,
+        )
+
+        # ── Composition ──
+        st.markdown('<div class="pl-section-eyebrow">COMPOSITION</div>'
+                    '<div class="pl-section-title">Amino acid breakdown</div>',
+                    unsafe_allow_html=True)
+
+        c_left, c_right = st.columns([1, 1], gap="large")
+        with c_left:
+            st.markdown(
+                f'<div class="pl-card">{render_donut(stats["aa_category_pct"])}'
+                f'<p style="margin-top:1rem;font-size:0.82rem;color:{INK_3};line-height:1.5;">'
+                f"Categories use the Lehninger groupings: hydrophobic side chains drive folding cores; "
+                f"polar residues prefer the surface; charged residues mediate binding and salt bridges; "
+                f"aromatic residues stack and absorb UV."
+                f"</p></div>",
+                unsafe_allow_html=True,
+            )
+        with c_right:
+            st.markdown(
+                f'<div class="pl-card">'
+                f'<div class="pl-card-num">PER-RESIDUE FREQUENCY (TOP 10)</div>'
+                f'<div style="margin-top:0.8rem;">'
+                f'{render_composition_bars(stats["aa_composition_pct"], top_n=10)}'
+                f"</div></div>",
+                unsafe_allow_html=True,
+            )
+
+        # ── Hydropathy profile ──
+        st.markdown(
+            f'<div class="pl-section-eyebrow">HYDROPATHY PROFILE  '
+            f'{explainer(TERM_EXPLAIN["kyte_doolittle"])}'
+            f"</div>"
+            f'<div class="pl-section-title">Kyte-Doolittle, 9-residue window</div>',
+            unsafe_allow_html=True,
+        )
+        if hydro_profile:
+            st.line_chart({"hydropathy": hydro_profile},
+                          height=180, use_container_width=True)
+            st.caption(
+                f"Above 0 → hydrophobic (likely buried or membrane-embedded). "
+                f"Below 0 → polar (likely solvent-exposed). "
+                f"Hover the (i) badge for a deeper explanation."
+            )
+
+        # ── Motif map ──
+        st.markdown(
+            f'<div class="pl-section-eyebrow">MOTIF MAP  '
+            f'{explainer(TERM_EXPLAIN["motifs"])}'
+            f"</div>"
+            f'<div class="pl-section-title">Known sequence patterns ({len(motifs)} hit{"s" if len(motifs) != 1 else ""})</div>',
+            unsafe_allow_html=True,
+        )
+        if motifs:
+            st.markdown(render_motif_map(motifs, len(current_seq)), unsafe_allow_html=True)
+            motif_rows_html = "".join(
+                f'<div style="display:flex;justify-content:space-between;padding:0.4rem 0;'
+                f'border-bottom:1px dashed {RULE};font-size:0.86rem;">'
+                f'<span style="color:{INK_2};">{html.escape(m["name"])}</span>'
+                f'<span style="color:{INK};font-family:\'JetBrains Mono\',monospace;">'
+                f'{m["start"]+1}–{m["end"]} · {html.escape(m["match"][:20])}</span></div>'
+                for m in motifs[:12]
+            )
+            st.markdown(motif_rows_html, unsafe_allow_html=True)
+            if len(motifs) > 12:
+                st.caption(f"+{len(motifs) - 12} more — full list available in the AI explanation.")
+        else:
+            st.caption(
+                "No canonical motifs matched. This is common for short or de-novo sequences; "
+                "absence of a hit does not imply absence of function."
+            )
+
+        # ── Per-residue pLDDT (only if fold is current) ──
+        if has_fold:
+            st.markdown(
+                f'<div class="pl-section-eyebrow">PER-RESIDUE CONFIDENCE</div>'
+                f'<div class="pl-section-title">pLDDT heatmap (residue-by-residue)</div>',
+                unsafe_allow_html=True,
+            )
+            plddt = extract_per_residue_plddt(st.session_state["pdb_string"])
+            st.markdown(render_plddt_heatmap(plddt), unsafe_allow_html=True)
+            legend = (
+                f'<div style="display:flex;gap:1.2rem;margin-top:0.4rem;font-size:0.74rem;'
+                f'color:{INK_3};font-family:\'JetBrains Mono\',monospace;">'
+                f'<span><span style="display:inline-block;width:10px;height:10px;background:{PLDDT_HI};'
+                f'border-radius:2px;margin-right:4px;"></span>&gt;90 very high</span>'
+                f'<span><span style="display:inline-block;width:10px;height:10px;background:{PLDDT_MID};'
+                f'border-radius:2px;margin-right:4px;"></span>70–90 confident</span>'
+                f'<span><span style="display:inline-block;width:10px;height:10px;background:#c08a3a;'
+                f'border-radius:2px;margin-right:4px;"></span>50–70 low</span>'
+                f'<span><span style="display:inline-block;width:10px;height:10px;background:{PLDDT_LO};'
+                f'border-radius:2px;margin-right:4px;"></span>&lt;50 very low</span>'
+                f"</div>"
+            )
+            st.markdown(legend, unsafe_allow_html=True)
+
+        # ── Raw sequence (collapsed) ──
+        with st.expander("Show full sequence"):
+            st.markdown(
+                f'<div class="pl-seq" style="max-height:280px;">{html.escape(current_seq)}</div>',
+                unsafe_allow_html=True,
+            )
+            st.caption(f"{len(current_seq)} amino acids · single-letter IUPAC")
+    else:
+        st.info(
+            "Load a sequence in the sidebar (Quick examples, Paste, UniProt search, or "
+            "click-to-build) — the dashboard populates immediately. Click **⚡ Fold & analyze** "
+            "for the 3D structure, confidence map, and AI explanations."
+        )
+
+
+# ── Tab 2: SCIENTIFIC (full AI explanation) ───────────────────────────────────
+with tab_sci:
     st.markdown(
-        '<div class="pl-card">'
-        '<div class="pl-card-num">01 / SCIENTIFIC</div>'
-        '<div class="pl-card-title">What this protein does</div>',
+        f'<div class="pl-section-eyebrow">AI SCIENTIFIC EXPLANATION</div>'
+        f'<div class="pl-section-title">{html.escape(current_name)}</div>',
         unsafe_allow_html=True,
     )
     if has_fold and st.session_state["explanation"]:
-        excerpt = st.session_state["explanation"]
-        st.markdown(f'<div class="pl-card-body pl-explain">{excerpt}</div>',
-                    unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="pl-explain" style="background:{PAPER_2};border:1px solid {RULE};'
+            f'border-radius:12px;padding:1.5rem 1.75rem;">'
+            f'{st.session_state["explanation"]}</div>',
+            unsafe_allow_html=True,
+        )
     elif framing:
         st.markdown(
-            f'<div class="pl-card-body pl-explain"><em>Sequence-level read (pre-fold):</em><br>{html.escape(framing)}'
-            f'<br><br><span style="color:{INK_3};">Run a fold for the full AI-grade scientific analysis.</span></div>',
+            f'<div class="pl-card">'
+            f'<p style="font-style:italic;color:{INK_2};margin:0;">'
+            f"{html.escape(framing)}</p><br>"
+            f'<p style="color:{INK_3};margin:0;">'
+            f"Click <strong>⚡ Fold & analyze</strong> in the sidebar to run the structural "
+            f"prediction and generate the full AI scientific analysis."
+            f"</p></div>",
             unsafe_allow_html=True,
         )
     else:
-        st.markdown(f'<div class="pl-card-body">Load a sequence to begin.</div>',
-                    unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
+        st.info("Load a sequence to begin.")
 
-with card2:
+
+# ── Tab 3: MEDICAL AFFAIRS / MSL ──────────────────────────────────────────────
+with tab_msl:
     st.markdown(
-        '<div class="pl-card">'
-        '<div class="pl-card-num">02 / MEDICAL</div>'
-        '<div class="pl-card-title">For the field</div>',
+        f'<div class="pl-section-eyebrow">MEDICAL AFFAIRS / MSL BRIEFING</div>'
+        f'<div class="pl-section-title">{html.escape(current_name)}</div>',
         unsafe_allow_html=True,
     )
     if has_fold and st.session_state["msl_summary"]:
         st.markdown(
-            f'<div class="pl-card-body pl-explain">{st.session_state["msl_summary"]}</div>',
-            unsafe_allow_html=True,
-        )
-    elif stats:
-        motif_summary = (
-            f"{len(motifs)} motif hit{'s' if len(motifs) != 1 else ''}"
-            if motifs else "no canonical motifs detected"
-        )
-        st.markdown(
-            f'<div class="pl-card-body">{motif_summary} · '
-            f"MW {stats['molecular_weight_kda']:.1f} kDa · pI {stats['isoelectric_point']:.2f}<br><br>"
-            f'<span style="color:{INK_3};">MSL-ready briefing appears after folding.</span></div>',
+            f'<div class="pl-explain" style="background:{PAPER_2};border:1px solid {RULE};'
+            f'border-radius:12px;padding:1.5rem 1.75rem;">'
+            f'{st.session_state["msl_summary"]}</div>',
             unsafe_allow_html=True,
         )
     else:
-        st.markdown(f'<div class="pl-card-body">Load a sequence to begin.</div>',
-                    unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
+        st.info(
+            "An MSL-ready briefing (executive summary, talking points, HCP Q&A, mechanism "
+            "framing) is generated after folding."
+        )
 
-with card3:
+
+# ── Tab 4: HOW IT WORKS ───────────────────────────────────────────────────────
+with tab_how:
     st.markdown(
-        '<div class="pl-card">'
-        '<div class="pl-card-num">03 / ANALYTICS</div>'
-        '<div class="pl-card-title">Per-residue confidence</div>',
+        f'<div class="pl-section-eyebrow">PIPELINE</div>'
+        f'<div class="pl-section-title">From letters to a 3D protein</div>',
         unsafe_allow_html=True,
     )
-    if has_fold:
-        plddt = extract_per_residue_plddt(st.session_state["pdb_string"])
-        st.markdown(render_plddt_heatmap(plddt), unsafe_allow_html=True)
-        legend = (
-            f'<div style="display:flex;gap:1rem;margin-top:0.6rem;font-size:0.72rem;'
-            f'color:{INK_3};font-family:\'JetBrains Mono\',monospace;">'
-            f'<span><span style="display:inline-block;width:10px;height:10px;background:{PLDDT_HI};'
-            f'border-radius:2px;margin-right:4px;"></span>&gt;90 very high</span>'
-            f'<span><span style="display:inline-block;width:10px;height:10px;background:{PLDDT_MID};'
-            f'border-radius:2px;margin-right:4px;"></span>70–90 confident</span>'
-            f'<span><span style="display:inline-block;width:10px;height:10px;background:{PLDDT_LO};'
-            f'border-radius:2px;margin-right:4px;"></span>&lt;70 low</span>'
-            f"</div>"
-        )
-        st.markdown(legend, unsafe_allow_html=True)
-    else:
-        st.markdown(
-            f'<div class="pl-card-body" style="color:{INK_3};">Per-residue pLDDT heatmap appears after folding.</div>',
-            unsafe_allow_html=True,
-        )
-    st.markdown("</div>", unsafe_allow_html=True)
+    how_steps = [
+        ("01", "Sequence in",
+         "Your amino acid string (FASTA, pasted, fetched from UniProt, or built letter-by-letter) "
+         "is validated and length-checked (min 10, max 1400 AA). Before any model runs, we compute "
+         "physicochemical character — MW, pI, charge, GRAVY hydropathy, Kyte-Doolittle profile, "
+         "and motif scan — so even unfolded peptides have an evidence-grounded analysis."),
+        ("02", "Language-model embedding",
+         "ESM-2 (Meta AI, 3B params) reads the sequence and emits a per-residue embedding that "
+         "captures evolutionary context inferred from ~65M natural sequences. This embedding is "
+         "the substrate every modern protein folder builds on."),
+        ("03", "Flow-matching diffusion",
+         "SimpleFold (Apple, 2025) starts from random 3D coordinates and iteratively denoises them, "
+         "conditioned on the ESM embedding, over N steps (default 200). Unlike AlphaFold's iterative "
+         "MSA refinement, SimpleFold's flow-matching diffusion is faster per step and runs comfortably "
+         "on a single GPU. Output: per-atom coordinates in PDB format."),
+        ("04", "Confidence + explanation",
+         "A pLDDT confidence head scores each residue's local accuracy (0–100, stored in the "
+         "B-factor column of the PDB). Venice AI then composes a domain-appropriate explanation — "
+         "Scientific for researchers, MSL for medical-affairs — using your computed sequence stats "
+         "as authoritative ground truth (the LLM cannot fabricate MW, pI, or motif hits)."),
+    ]
+    how_cols = st.columns(4, gap="large")
+    for col, (num, title, body) in zip(how_cols, how_steps):
+        with col:
+            st.markdown(
+                f'<div class="pl-card-num">{num}</div>'
+                f'<div style="font-family:\'EB Garamond\',serif;font-weight:500;font-size:1.15rem;'
+                f'margin:0.3rem 0 0.6rem 0;color:{INK};">{html.escape(title)}</div>'
+                f'<p style="font-size:0.87rem;color:{INK_2};line-height:1.6;">{body}</p>',
+                unsafe_allow_html=True,
+            )
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Sequence insights (always-on)
-# ══════════════════════════════════════════════════════════════════════════════
-
-st.markdown("<div style='height:2rem;'></div>", unsafe_allow_html=True)
-
-ins_left, ins_right = st.columns([1, 1], gap="large")
-
-with ins_left:
+    # pLDDT explainer
     st.markdown(
-        '<div class="pl-card">'
-        '<div class="pl-card-num">SEQUENCE INSIGHTS</div>'
-        '<div class="pl-card-title">Physicochemical character</div>',
+        f"""
+        <div class="pl-section-eyebrow" style="margin-top:2.5rem;">CONFIDENCE · pLDDT</div>
+        <div class="pl-section-title">How to read the score</div>
+        <div class="pl-card">
+          <p class="pl-card-body" style="margin-bottom:1rem;">
+            <strong>pLDDT</strong> ("predicted Local Distance Difference Test") is a per-residue
+            confidence score the model assigns to its own prediction, on a 0–100 scale. We average
+            it for the headline number; the per-residue values are stored in the B-factor column
+            of the PDB and shown as the heatmap in the Overview tab.
+          </p>
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:1rem;">
+            <div><div style="width:20px;height:20px;background:{PLDDT_HI};border-radius:3px;margin-bottom:0.4rem;"></div>
+              <strong style="color:{INK};">&gt; 90 · very high</strong>
+              <p style="font-size:0.83rem;color:{INK_2};margin:0.2rem 0 0 0;">Backbone and side chains reliable.</p></div>
+            <div><div style="width:20px;height:20px;background:{PLDDT_MID};border-radius:3px;margin-bottom:0.4rem;"></div>
+              <strong style="color:{INK};">70–90 · confident</strong>
+              <p style="font-size:0.83rem;color:{INK_2};margin:0.2rem 0 0 0;">Backbone reliable, side chains mostly right.</p></div>
+            <div><div style="width:20px;height:20px;background:#c08a3a;border-radius:3px;margin-bottom:0.4rem;"></div>
+              <strong style="color:{INK};">50–70 · low</strong>
+              <p style="font-size:0.83rem;color:{INK_2};margin:0.2rem 0 0 0;">General topology may be right.</p></div>
+            <div><div style="width:20px;height:20px;background:{PLDDT_LO};border-radius:3px;margin-bottom:0.4rem;"></div>
+              <strong style="color:{INK};">&lt; 50 · very low</strong>
+              <p style="font-size:0.83rem;color:{INK_2};margin:0.2rem 0 0 0;">Likely disordered or wrong.</p></div>
+          </div>
+        </div>
+        """,
         unsafe_allow_html=True,
     )
-    if stats:
-        stat_rows = [
-            ("Length", f"{stats['length']} AA"),
-            ("Molecular weight", f"{stats['molecular_weight_kda']:.2f} kDa"),
-            ("Isoelectric point (pI)", f"{stats['isoelectric_point']:.2f}"),
-            ("Net charge @ pH 7", f"{stats['net_charge_at_ph7']:+.2f}"),
-            ("Hydropathy (GRAVY)", f"{stats['gravy']:+.2f}"),
-            ("Aromaticity", f"{stats['aromaticity'] * 100:.1f}%"),
-            ("Instability index", f"{stats['instability_index']:.1f}"),
-            ("ε280 (reduced)", f"{stats['extinction_coefficient_280nm']:,} M⁻¹cm⁻¹"),
-        ]
-        rows_html = "".join(
-            f'<div style="display:flex;justify-content:space-between;padding:0.35rem 0;'
-            f'border-bottom:1px dashed {RULE};font-size:0.88rem;">'
-            f'<span style="color:{INK_2};">{k}</span>'
-            f'<span style="color:{INK};font-family:\'JetBrains Mono\',monospace;">{v}</span></div>'
-            for k, v in stat_rows
-        )
-        st.markdown(rows_html, unsafe_allow_html=True)
-        st.markdown(
-            f'<p style="margin-top:1rem;font-size:0.88rem;color:{INK_2};line-height:1.6;'
-            f'font-style:italic;">{html.escape(framing)}</p>',
-            unsafe_allow_html=True,
-        )
-    else:
-        st.markdown(
-            f'<div class="pl-card-body" style="color:{INK_3};">No sequence loaded yet.</div>',
-            unsafe_allow_html=True,
-        )
-    st.markdown("</div>", unsafe_allow_html=True)
 
-with ins_right:
+    # Backends table
     st.markdown(
-        '<div class="pl-card">'
-        '<div class="pl-card-num">COMPOSITION</div>'
-        '<div class="pl-card-title">Amino acid breakdown</div>',
+        f"""
+        <div class="pl-section-eyebrow" style="margin-top:2.5rem;">INFRASTRUCTURE</div>
+        <div class="pl-section-title">Folding backends</div>
+        <div class="pl-card">
+          <table style="width:100%;border-collapse:collapse;font-size:0.9rem;">
+            <thead>
+              <tr style="text-align:left;border-bottom:1px solid {RULE};color:{INK_3};
+                         font-family:'JetBrains Mono',monospace;font-size:0.75rem;
+                         letter-spacing:0.06em;text-transform:uppercase;">
+                <th style="padding:0.6rem 0.4rem;">Backend</th>
+                <th style="padding:0.6rem 0.4rem;">When used</th>
+                <th style="padding:0.6rem 0.4rem;">Cold start</th>
+                <th style="padding:0.6rem 0.4rem;">Warm fold</th>
+              </tr>
+            </thead>
+            <tbody style="color:{INK_2};">
+              <tr style="border-bottom:1px dashed {RULE};">
+                <td style="padding:0.65rem 0.4rem;color:{INK};">SimpleFold 100M (local MLX)</td>
+                <td style="padding:0.65rem 0.4rem;">macOS Apple Silicon with the CLI installed</td>
+                <td style="padding:0.65rem 0.4rem;">~10 s</td>
+                <td style="padding:0.65rem 0.4rem;">30–90 s</td>
+              </tr>
+              <tr style="border-bottom:1px dashed {RULE};">
+                <td style="padding:0.65rem 0.4rem;color:{INK};">SimpleFold 100M (Modal GPU)</td>
+                <td style="padding:0.65rem 0.4rem;">Cloud deployments, deferred to Modal A10G</td>
+                <td style="padding:0.65rem 0.4rem;">~70 s (cache hit)</td>
+                <td style="padding:0.65rem 0.4rem;">~3 s</td>
+              </tr>
+              <tr>
+                <td style="padding:0.65rem 0.4rem;color:{INK};">ESMFold (public API)</td>
+                <td style="padding:0.65rem 0.4rem;">Zero-setup fallback, always available</td>
+                <td style="padding:0.65rem 0.4rem;">—</td>
+                <td style="padding:0.65rem 0.4rem;">15–30 s</td>
+              </tr>
+            </tbody>
+          </table>
+          <p style="margin-top:1rem;font-size:0.85rem;color:{INK_3};line-height:1.5;">
+            The Modal backend caches the 6 GB SimpleFold checkpoint plus the boltz auxiliary
+            (CCD + pLDDT side-car) on a persistent volume, so only the first-ever container pays
+            the download cost. Subsequent containers cold-start in ~70 s; warm containers within
+            the 5-minute scaledown window serve folds in seconds.
+          </p>
+        </div>
+        """,
         unsafe_allow_html=True,
     )
-    if stats:
-        cats = stats["aa_category_pct"]
-        cat_chips = " ".join(
-            f'<span class="pl-pill">{label}: {cats.get(key, 0):.0f}%</span>'
-            for key, label in [
-                ("hydrophobic", "hydrophobic"),
-                ("polar_uncharged", "polar"),
-                ("positive", "+ charge"),
-                ("negative", "− charge"),
-                ("aromatic", "aromatic"),
-                ("special", "C/G/P"),
-            ]
-        )
-        st.markdown(f'<div class="pl-pill-row">{cat_chips}</div>', unsafe_allow_html=True)
-        st.markdown(
-            render_composition_bars(stats["aa_composition_pct"], top_n=10),
-            unsafe_allow_html=True,
-        )
-        if hydro_profile:
-            st.markdown(
-                f'<p style="margin-top:1rem;font-size:0.78rem;color:{INK_3};'
-                f"font-family:'JetBrains Mono',monospace;letter-spacing:0.08em;\">KYTE-DOOLITTLE HYDROPATHY</p>",
-                unsafe_allow_html=True,
-            )
-            st.line_chart(
-                {"hydropathy": hydro_profile},
-                height=140,
-                use_container_width=True,
-            )
-        if motifs:
-            st.markdown(
-                f'<p style="margin-top:0.8rem;font-size:0.78rem;color:{INK_3};'
-                f"font-family:'JetBrains Mono',monospace;letter-spacing:0.08em;\">"
-                f"MOTIF HITS ({len(motifs)})</p>",
-                unsafe_allow_html=True,
-            )
-            top_motifs = motifs[:8]
-            motif_rows = "".join(
-                f'<div style="display:flex;justify-content:space-between;padding:0.3rem 0;'
-                f'border-bottom:1px dashed {RULE};font-size:0.83rem;">'
-                f'<span style="color:{INK_2};">{html.escape(m["name"])}</span>'
-                f'<span style="color:{INK};font-family:\'JetBrains Mono\',monospace;">'
-                f'{m["start"]+1}–{m["end"]} · {html.escape(m["match"][:14])}</span></div>'
-                for m in top_motifs
-            )
-            st.markdown(motif_rows, unsafe_allow_html=True)
-            if len(motifs) > 8:
-                st.caption(f"+{len(motifs) - 8} more")
-    else:
-        st.markdown(
-            f'<div class="pl-card-body" style="color:{INK_3};">No sequence loaded.</div>',
-            unsafe_allow_html=True,
-        )
-    st.markdown("</div>", unsafe_allow_html=True)
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Full AI explanations (tabs)
-# ══════════════════════════════════════════════════════════════════════════════
-
-if has_fold and (st.session_state["explanation"] or st.session_state["msl_summary"]):
-    st.markdown("<div style='height:2rem;'></div>", unsafe_allow_html=True)
+    # Tech stack
     st.markdown(
-        '<div class="pl-card">'
-        '<div class="pl-card-num">AI ANALYSIS</div>'
-        f'<div class="pl-card-title">{html.escape(current_name)}</div>',
+        f"""
+        <div class="pl-section-eyebrow" style="margin-top:2.5rem;">TECH STACK</div>
+        <div class="pl-section-title">Built with</div>
+        <div class="pl-card">
+          <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:1rem 2rem;">
+            <div><strong style="color:{INK};">SimpleFold</strong>
+              <p style="font-size:0.85rem;color:{INK_2};margin:0.2rem 0;">
+                Apple, 2025 — flow-matching protein folder, 100 M params.</p></div>
+            <div><strong style="color:{INK};">ESM-2</strong>
+              <p style="font-size:0.85rem;color:{INK_2};margin:0.2rem 0;">
+                Meta AI — 3 B-param protein language model for embeddings.</p></div>
+            <div><strong style="color:{INK};">Venice AI</strong>
+              <p style="font-size:0.85rem;color:{INK_2};margin:0.2rem 0;">
+                Uncensored chat model that composes scientific + MSL explanations.</p></div>
+            <div><strong style="color:{INK};">Modal</strong>
+              <p style="font-size:0.85rem;color:{INK_2};margin:0.2rem 0;">
+                Serverless GPU runtime; A10G containers with persistent volume cache.</p></div>
+            <div><strong style="color:{INK};">py3Dmol</strong>
+              <p style="font-size:0.85rem;color:{INK_2};margin:0.2rem 0;">
+                WebGL molecular viewer rendered via Streamlit components.</p></div>
+            <div><strong style="color:{INK};">Biopython · ProtParam</strong>
+              <p style="font-size:0.85rem;color:{INK_2};margin:0.2rem 0;">
+                MW, pI, ε280, instability, aromaticity. Industry reference.</p></div>
+          </div>
+        </div>
+        """,
         unsafe_allow_html=True,
     )
-    tab_sci, tab_msl, tab_seq = st.tabs(["Scientific", "MSL / Medical Affairs", "Sequence"])
-    with tab_sci:
-        if st.session_state["explanation"]:
-            st.markdown(
-                f'<div class="pl-explain">{st.session_state["explanation"]}</div>',
-                unsafe_allow_html=True,
-            )
-        else:
-            st.info("Fold the sequence to generate a scientific explanation.")
-    with tab_msl:
-        if st.session_state["msl_summary"]:
-            st.markdown(
-                f'<div class="pl-explain">{st.session_state["msl_summary"]}</div>',
-                unsafe_allow_html=True,
-            )
-        else:
-            st.info("Fold the sequence to generate an MSL briefing.")
-    with tab_seq:
-        st.markdown(
-            f'<div class="pl-seq" style="max-height:300px;">{html.escape(current_seq)}</div>',
-            unsafe_allow_html=True,
-        )
-        st.caption(f"{len(current_seq)} amino acids · single-letter IUPAC")
-    st.markdown("</div>", unsafe_allow_html=True)
-
 
 # ══════════════════════════════════════════════════════════════════════════════
-# How it works — model explainer
+# Footer
 # ══════════════════════════════════════════════════════════════════════════════
 
-st.markdown("<div style='height:3rem;'></div>", unsafe_allow_html=True)
-st.markdown(
-    f'<div class="pl-card-num">HOW IT WORKS</div>'
-    f'<h2 style="font-family:\'EB Garamond\',serif;font-weight:500;font-size:2rem;'
-    f'color:{INK};margin:0.4rem 0 1.5rem 0;">From letters to a 3D protein</h2>',
-    unsafe_allow_html=True,
-)
-
-how_cols = st.columns(4, gap="large")
-how_steps = [
-    ("01", "Sequence in",
-     "Your amino acid string (FASTA or built letter-by-letter) is validated and length-checked. "
-     "We compute physicochemical character — MW, pI, charge, hydropathy, motifs — before any model runs."),
-    ("02", "Language model embedding",
-     "ESM-2 (Meta AI) reads the sequence and emits a per-residue embedding capturing evolutionary "
-     "context. This is the same protein language model used to seed many state-of-the-art folders."),
-    ("03", "Flow-matching diffusion",
-     "SimpleFold (Apple, 2025) starts from random 3D coordinates and iteratively denoises them, "
-     "conditioned on the ESM embedding, over N denoising steps. Output: per-atom coordinates."),
-    ("04", "Confidence + explanation",
-     "A pLDDT confidence head scores each residue's local accuracy (0–100, stored in PDB B-factors). "
-     "Venice AI synthesizes a domain-appropriate explanation using your sequence stats as ground truth."),
-]
-for col, (num, title, body) in zip(how_cols, how_steps):
-    with col:
-        st.markdown(
-            f'<div class="pl-card-num">{num}</div>'
-            f'<div style="font-family:\'EB Garamond\',serif;font-weight:500;font-size:1.15rem;'
-            f'margin:0.3rem 0 0.6rem 0;color:{INK};">{html.escape(title)}</div>'
-            f'<p style="font-size:0.88rem;color:{INK_2};line-height:1.6;">{body}</p>',
-            unsafe_allow_html=True,
-        )
-
-# pLDDT explainer block — always visible
-st.markdown("<div style='height:2rem;'></div>", unsafe_allow_html=True)
-st.markdown(
-    f"""
-    <div class="pl-card">
-      <div class="pl-card-num">CONFIDENCE · pLDDT</div>
-      <div class="pl-card-title">How to read the score</div>
-      <p class="pl-card-body">
-        <strong>pLDDT</strong> ("predicted Local Distance Difference Test") is a per-residue confidence
-        score the model assigns to its own prediction, on a 0–100 scale. We average it for the headline
-        number; the per-residue values are stored in the B-factor column of the PDB and shown as the
-        heatmap above.
-      </p>
-      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:1rem;margin-top:1rem;">
-        <div><div style="width:20px;height:20px;background:{PLDDT_HI};border-radius:3px;margin-bottom:0.4rem;"></div>
-          <strong style="color:{INK};">&gt; 90 · very high</strong>
-          <p style="font-size:0.83rem;color:{INK_2};margin:0.2rem 0 0 0;">Backbone and side chains reliable.</p></div>
-        <div><div style="width:20px;height:20px;background:{PLDDT_MID};border-radius:3px;margin-bottom:0.4rem;"></div>
-          <strong style="color:{INK};">70–90 · confident</strong>
-          <p style="font-size:0.83rem;color:{INK_2};margin:0.2rem 0 0 0;">Backbone reliable, side chains mostly right.</p></div>
-        <div><div style="width:20px;height:20px;background:#c08a3a;border-radius:3px;margin-bottom:0.4rem;"></div>
-          <strong style="color:{INK};">50–70 · low</strong>
-          <p style="font-size:0.83rem;color:{INK_2};margin:0.2rem 0 0 0;">General topology may be right.</p></div>
-        <div><div style="width:20px;height:20px;background:{PLDDT_LO};border-radius:3px;margin-bottom:0.4rem;"></div>
-          <strong style="color:{INK};">&lt; 50 · very low</strong>
-          <p style="font-size:0.83rem;color:{INK_2};margin:0.2rem 0 0 0;">Likely disordered or wrong.</p></div>
-      </div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Footer — Sundai Club attribution
-# ══════════════════════════════════════════════════════════════════════════════
-
-_SUNDAI_LOGO = os.path.join(os.path.dirname(__file__), "assets", "sundai_club.png")
-_sundai_uri = _img_data_uri(_SUNDAI_LOGO)
-_logo_html = (
-    f'<img src="{_sundai_uri}" alt="Sundai Club" style="height:42px;opacity:0.85;"/>'
-    if _sundai_uri else '<div style="font-size:1.5rem;">🍦</div>'
-)
 st.markdown(
     f"""
     <div class="pl-footer">
-      <a href="https://sundai.club" target="_blank" style="text-decoration:none;color:inherit;
-         display:inline-flex;flex-direction:column;align-items:center;gap:0.4rem;">
-        {_logo_html}
-        <div style="font-size:0.8rem;color:{INK_3};">
-          Developed at <strong style="color:{ACCENT};letter-spacing:0.04em;">SUNDAI CLUB</strong>
-          · A community of builders shipping AI projects
-        </div>
-      </a>
+      proteinlens · built with SimpleFold (Apple) · ESM-2 (Meta) · Venice AI · Modal · py3Dmol<br>
+      <span style="opacity:0.75;">attribution in the top-right nav · sundai.club</span>
     </div>
     """,
     unsafe_allow_html=True,
