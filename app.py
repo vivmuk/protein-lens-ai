@@ -444,7 +444,9 @@ def render_protein_3d(pdb_string: str, color_scheme: str, bg_color: str = "#FFFF
         )
         return
 
-    view = py3Dmol.view(width=720, height=460)
+    # Larger fixed canvas + zoomTo() then center() so the molecule lands in the middle.
+    # The components.html iframe matches the canvas width; we let it fill the card.
+    view = py3Dmol.view(width=820, height=480)
     view.addModel(pdb_string, "pdb")
 
     style_map = {
@@ -459,7 +461,78 @@ def render_protein_3d(pdb_string: str, color_scheme: str, bg_color: str = "#FFFF
     view.setStyle(style_map.get(color_scheme, {"cartoon": {"color": "spectrum"}}))
     view.setBackgroundColor(bg_color)
     view.zoomTo()
-    components.html(view._make_html(), height=480, scrolling=False)
+    # Wrap the iframe in a flex container so it self-centers inside the card.
+    raw_html = view._make_html()
+    centered_html = (
+        f'<div style="display:flex;justify-content:center;align-items:center;width:100%;">'
+        f'{raw_html}</div>'
+    )
+    components.html(centered_html, height=500, scrolling=False)
+
+
+def render_color_legend(color_scheme: str) -> str:
+    """Return an HTML legend explaining the current viewer color scheme."""
+    if color_scheme == "Spectrum (Rainbow)":
+        gradient = (
+            "linear-gradient(90deg, #2a4eff 0%, #00b6c7 25%, #36c93c 50%, "
+            "#f3c83f 75%, #e93d3d 100%)"
+        )
+        return (
+            f'<div style="margin-top:0.6rem;">'
+            f'<div style="display:flex;justify-content:space-between;font-family:\'JetBrains Mono\',monospace;'
+            f'font-size:0.7rem;color:{INK_3};margin-bottom:4px;">'
+            f'<span>N-terminus (start)</span><span>C-terminus (end)</span></div>'
+            f'<div style="height:8px;border-radius:4px;background:{gradient};"></div>'
+            f'<p style="font-size:0.78rem;color:{INK_3};margin:0.4rem 0 0 0;line-height:1.4;">'
+            f"Color follows residue position — useful for seeing how the chain folds back on itself."
+            f"</p></div>"
+        )
+    if color_scheme == "Confidence (pLDDT)":
+        return (
+            f'<div style="margin-top:0.6rem;display:flex;gap:0.8rem;flex-wrap:wrap;'
+            f'font-family:\'JetBrains Mono\',monospace;font-size:0.72rem;color:{INK_2};">'
+            f'<span><span style="display:inline-block;width:10px;height:10px;background:{PLDDT_HI};'
+            f'border-radius:2px;margin-right:4px;vertical-align:middle;"></span>&gt;90 very high</span>'
+            f'<span><span style="display:inline-block;width:10px;height:10px;background:{PLDDT_MID};'
+            f'border-radius:2px;margin-right:4px;vertical-align:middle;"></span>70–90 confident</span>'
+            f'<span><span style="display:inline-block;width:10px;height:10px;background:#c08a3a;'
+            f'border-radius:2px;margin-right:4px;vertical-align:middle;"></span>50–70 low</span>'
+            f'<span><span style="display:inline-block;width:10px;height:10px;background:{PLDDT_LO};'
+            f'border-radius:2px;margin-right:4px;vertical-align:middle;"></span>&lt;50 very low</span>'
+            f"</div>"
+            f'<p style="font-size:0.78rem;color:{INK_3};margin:0.4rem 0 0 0;line-height:1.4;">'
+            f"Color = per-residue confidence. Blue/red strands suggest unreliable regions."
+            f"</p>"
+        )
+    if color_scheme == "Secondary Structure":
+        return (
+            f'<div style="margin-top:0.6rem;display:flex;gap:1rem;'
+            f'font-family:\'JetBrains Mono\',monospace;font-size:0.72rem;color:{INK_2};">'
+            f'<span><span style="display:inline-block;width:10px;height:10px;background:#ff00ff;'
+            f'border-radius:2px;margin-right:4px;vertical-align:middle;"></span>α-helix</span>'
+            f'<span><span style="display:inline-block;width:10px;height:10px;background:#ffff00;'
+            f'border-radius:2px;margin-right:4px;vertical-align:middle;"></span>β-sheet</span>'
+            f'<span><span style="display:inline-block;width:10px;height:10px;background:#cccccc;'
+            f'border-radius:2px;margin-right:4px;vertical-align:middle;"></span>loop / coil</span>'
+            f"</div>"
+            f'<p style="font-size:0.78rem;color:{INK_3};margin:0.4rem 0 0 0;line-height:1.4;">'
+            f"Jmol scheme — α-helices in magenta, β-strands in yellow, loops in gray."
+            f"</p>"
+        )
+    if color_scheme == "Hydrophobicity":
+        gradient = "linear-gradient(90deg, #2c5aa0 0%, #f5f5f5 50%, #b03030 100%)"
+        return (
+            f'<div style="margin-top:0.6rem;">'
+            f'<div style="display:flex;justify-content:space-between;font-family:\'JetBrains Mono\',monospace;'
+            f'font-size:0.7rem;color:{INK_3};margin-bottom:4px;">'
+            f'<span>polar (water-loving)</span><span>hydrophobic (water-fearing)</span></div>'
+            f'<div style="height:8px;border-radius:4px;background:{gradient};"></div>'
+            f'<p style="font-size:0.78rem;color:{INK_3};margin:0.4rem 0 0 0;line-height:1.4;">'
+            f"Red residues cluster in the protein core; blue residues face the solvent."
+            f"</p></div>"
+        )
+    # Monochrome — no legend needed
+    return ""
 
 
 def validate_sequence(seq: str) -> tuple[bool, str]:
@@ -711,13 +784,10 @@ if not st.session_state["sequence"]:
 with st.sidebar:
     st.markdown(
         f'<div style="font-family:\'EB Garamond\',serif;font-style:italic;'
-        f'font-size:1.4rem;color:{INK};margin-bottom:0.2rem;">'
+        f'font-size:1.4rem;color:{INK};margin-bottom:1.25rem;">'
         f'<span style="display:inline-block;width:10px;height:10px;background:{INK};'
         f'border-radius:50%;margin-right:0.5rem;vertical-align:middle;"></span>'
-        f"proteinlens</div>"
-        f'<div style="font-size:0.78rem;color:{INK_3};margin-bottom:1.5rem;'
-        f'font-family:\'JetBrains Mono\',monospace;letter-spacing:0.05em;">'
-        f"controls · settings</div>",
+        f"proteinlens</div>",
         unsafe_allow_html=True,
     )
 
@@ -855,14 +925,14 @@ _SUNDAI_LOGO = os.path.join(os.path.dirname(__file__), "assets", "sundai_club.pn
 _sundai_uri = _img_data_uri(_SUNDAI_LOGO)
 _sundai_nav_html = (
     f'<a href="https://sundai.club" target="_blank" '
-    f'style="display:flex;align-items:center;gap:0.55rem;text-decoration:none;color:{INK_3};">'
-    f'<img src="{_sundai_uri}" alt="Sundai Club" style="height:28px;opacity:0.9;"/>'
-    f'<span style="font-size:0.78rem;font-family:\'JetBrains Mono\',monospace;line-height:1.25;">'
-    f'developed at <strong style="color:{ACCENT};">SUNDAI CLUB</strong><br>'
-    f'<span style="color:{INK_3};opacity:0.75;">since May 2026</span></span></a>'
+    f'style="display:flex;align-items:center;gap:0.85rem;text-decoration:none;color:{INK_3};">'
+    f'<img src="{_sundai_uri}" alt="Sundai Club" style="height:54px;opacity:0.95;"/>'
+    f'<span style="font-size:0.82rem;font-family:\'JetBrains Mono\',monospace;line-height:1.3;">'
+    f'developed at <strong style="color:{ACCENT};font-size:0.92rem;">SUNDAI CLUB</strong><br>'
+    f'<span style="color:{INK_3};opacity:0.8;">5.24.2026</span></span></a>'
     if _sundai_uri else
     f'<a href="https://sundai.club" target="_blank" style="color:{INK_3};text-decoration:none;'
-    f'font-size:0.85rem;">developed at <strong style="color:{ACCENT};">SUNDAI CLUB</strong> · since May 2026</a>'
+    f'font-size:0.9rem;">developed at <strong style="color:{ACCENT};">SUNDAI CLUB</strong> · 5.24.2026</a>'
 )
 
 st.markdown(
@@ -969,8 +1039,12 @@ with hero_right:
 
     if has_fold:
         render_protein_3d(st.session_state["pdb_string"], color_scheme=color_scheme)
+        legend_html = render_color_legend(color_scheme)
+        if legend_html:
+            st.markdown(legend_html, unsafe_allow_html=True)
         st.markdown(
-            f'<div class="pl-plddt-bar"><div class="pl-plddt-fill" '
+            f'<div class="pl-plddt-bar" style="margin-top:0.8rem;">'
+            f'<div class="pl-plddt-fill" '
             f'style="width:{min(conf_pct,100):.0f}%;background:{conf_color};"></div></div>',
             unsafe_allow_html=True,
         )
