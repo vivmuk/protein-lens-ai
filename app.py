@@ -77,6 +77,10 @@ st.markdown(
       /* Hide Streamlit chrome we don't need */
       #MainMenu, footer, header[data-testid="stHeader"] {{ visibility: hidden; height: 0; }}
 
+      /* Hide Streamlit's auto-anchor link icons on headings */
+      h1 > a, h2 > a, h3 > a, h4 > a, h5 > a,
+      [data-testid="stHeaderActionElements"] {{ display: none !important; }}
+
       /* ── Top nav (decorative) ── */
       .pl-nav {{
         display:flex; align-items:center; padding: 0.5rem 0 1.5rem 0;
@@ -443,6 +447,7 @@ for key, default in [
     ("protein_name", None),
     ("sequence", None),
     ("confidence", None),
+    ("folded_sequence", None),
     ("build_seq", ""),
     ("selected_preset_id", None),
     ("input_mode", "Quick examples"),
@@ -608,13 +613,7 @@ st.markdown(
     f"""
     <div class="pl-nav">
       <div class="brand"><span class="dot"></span>proteinlens</div>
-      <div class="links">
-        <a class="active" href="#fold">Fold</a>
-        <a href="#library">Library</a>
-        <a href="#docs">Docs</a>
-        <a href="#api">API</a>
-      </div>
-      <div class="meta">⌘K  ·  {html.escape((st.session_state["protein_name"] or "unknown")[:24])}</div>
+      <div class="meta" style="margin-left:auto;">{html.escape((st.session_state["protein_name"] or "unknown")[:32])}</div>
     </div>
     """,
     unsafe_allow_html=True,
@@ -627,7 +626,21 @@ st.markdown(
 
 current_seq: str = (st.session_state["sequence"] or "").upper()
 current_name: str = st.session_state["protein_name"] or "Unknown peptide"
-has_fold: bool = bool(st.session_state["pdb_string"])
+
+# In Build mode, always reflect the live build_seq (even below the 10-AA fold threshold)
+# so the user sees their typing in real time instead of the previously loaded preset.
+if input_mode == "Build sequence":
+    current_seq = st.session_state["build_seq"].upper()
+    current_name = (protein_name_input or "Custom peptide") if current_seq else "—"
+
+# Only show a fold when it corresponds to the sequence currently displayed.
+# Prevents the viewer from showing a stale (e.g., default GLP-1) structure after
+# the user switches input modes or starts building a new peptide.
+has_fold: bool = (
+    bool(st.session_state["pdb_string"])
+    and st.session_state.get("folded_sequence") == current_seq
+    and bool(current_seq)
+)
 
 hero_left, hero_right = st.columns([5, 6], gap="large")
 
@@ -638,8 +651,8 @@ with hero_left:
     )
     st.markdown(f'<div class="pl-eyebrow">{html.escape(eyebrow)}</div>', unsafe_allow_html=True)
     st.markdown(
-        f'<h1 class="pl-headline">One sequence.<br>'
-        f'<span class="accent">One fold.</span><br>One story.</h1>',
+        f'<div class="pl-headline">One sequence.<br>'
+        f'<span class="accent">One fold.</span><br>One story.</div>',
         unsafe_allow_html=True,
     )
     st.markdown(
@@ -659,21 +672,39 @@ with hero_left:
         f"</div>",
         unsafe_allow_html=True,
     )
-    st.caption(
-        "paste fasta  ·  search uniprot  ·  build sequence  ·  use the sidebar →"
-    )
+    st.caption("Use the sidebar to paste a sequence, search UniProt, or build one click-by-click.")
 
 with hero_right:
     st.markdown('<div class="pl-card" style="padding:1.5rem;">', unsafe_allow_html=True)
 
-    # Stat pills
     backend_label = {
         "simplefold": "SimpleFold 100M · local MLX",
         "modal": "SimpleFold 100M · Modal GPU",
         "esm": "ESMFold · API",
     }.get(FOLDING_BACKEND, FOLDING_BACKEND)
-    conf_pct = (st.session_state["confidence"] or 0) * 100
+
+    # Pills row: AA count + model + (when folded) prominent color-coded pLDDT
+    conf = st.session_state["confidence"] or 0.0
+    conf_pct = conf * 100
+    if has_fold:
+        if conf >= 0.90:
+            conf_color, conf_band = PLDDT_HI, "very high"
+        elif conf >= 0.70:
+            conf_color, conf_band = PLDDT_MID, "confident"
+        elif conf >= 0.50:
+            conf_color, conf_band = "#c08a3a", "low"
+        else:
+            conf_color, conf_band = PLDDT_LO, "very low"
+        conf_pill = (
+            f'<span class="pl-pill" style="background:{conf_color}15;border-color:{conf_color}50;'
+            f'color:{conf_color};font-weight:600;">'
+            f'pLDDT {conf_pct:.1f}% · {conf_band}</span>'
+        )
+    else:
+        conf_pill = '<span class="pl-pill">pLDDT —</span>'
+
     pills_html = (
+        f'{conf_pill}'
         f'<span class="pl-pill">{len(current_seq)} AA</span>'
         f'<span class="pl-pill">{html.escape(backend_label)}</span>'
         f'<span class="pl-pill">{html.escape(color_scheme.lower())}</span>'
@@ -683,35 +714,40 @@ with hero_right:
     if has_fold:
         render_protein_3d(st.session_state["pdb_string"], color_scheme=color_scheme)
         st.markdown(
-            f'<div class="pl-plddt-row"><span>pLDDT</span><span>{conf_pct:.1f}%</span></div>'
-            f'<div class="pl-plddt-bar"><div class="pl-plddt-fill" style="width:{min(conf_pct,100):.0f}%"></div></div>',
+            f'<div class="pl-plddt-bar"><div class="pl-plddt-fill" '
+            f'style="width:{min(conf_pct,100):.0f}%;background:{conf_color};"></div></div>',
             unsafe_allow_html=True,
         )
-        d1, d2 = st.columns([1, 1])
-        with d1:
-            st.download_button(
-                "↓  PDB",
-                data=st.session_state["pdb_string"],
-                file_name=f"{current_name.replace(' ', '_')}.pdb",
-                mime="text/plain",
-                use_container_width=True,
-            )
-        with d2:
-            st.markdown(
-                f'<div style="text-align:right;font-family:\'JetBrains Mono\',monospace;'
-                f'font-size:0.78rem;color:{INK_3};padding-top:0.4rem;">'
-                f"⌘ share</div>",
-                unsafe_allow_html=True,
-            )
+        st.download_button(
+            "↓  Download PDB",
+            data=st.session_state["pdb_string"],
+            file_name=f"{current_name.replace(' ', '_')}.pdb",
+            mime="text/plain",
+            use_container_width=True,
+        )
     else:
+        if input_mode == "Build sequence" and current_seq and len(current_seq) < 10:
+            need = 10 - len(current_seq)
+            empty_msg = (
+                f"<strong style=\"color:{INK};\">{len(current_seq)} / 10</strong> "
+                f"amino acids — add <strong style=\"color:{INK};\">{need}</strong> more, "
+                f"then click <strong style=\"color:{INK};font-style:normal;\">⚡ Fold & analyze</strong>"
+            )
+        elif not current_seq:
+            empty_msg = (
+                f'load a sequence in the sidebar, then click '
+                f'<strong style="color:{INK};font-style:normal;">⚡ Fold & analyze</strong>'
+            )
+        else:
+            empty_msg = (
+                f'click <strong style="color:{INK};font-style:normal;font-family:Inter,sans-serif;'
+                f'font-weight:500;">⚡ Fold & analyze</strong> in the sidebar'
+            )
         st.markdown(
-            f'<div style="height:340px;display:flex;align-items:center;justify-content:center;'
-            f'color:{INK_3};font-family:\'EB Garamond\',serif;font-style:italic;font-size:1.2rem;">'
-            f'click <strong style="color:{INK};font-style:normal;font-family:Inter,sans-serif;'
-            f"font-weight:500;\">⚡ Fold & analyze</strong>&nbsp; in the sidebar"
-            f"</div>"
-            f'<div class="pl-plddt-row"><span>pLDDT</span><span>—</span></div>'
-            f'<div class="pl-plddt-bar"></div>',
+            f'<div style="height:380px;display:flex;align-items:center;justify-content:center;'
+            f'text-align:center;color:{INK_3};font-family:\'EB Garamond\',serif;font-style:italic;'
+            f'font-size:1.15rem;padding:0 1.5rem;">'
+            f'{empty_msg}</div>',
             unsafe_allow_html=True,
         )
 
@@ -733,6 +769,7 @@ if fold_clicked:
         st.stop()
     clean = result
     st.session_state["sequence"] = clean
+    st.session_state["folded_sequence"] = clean
     pname = current_name
 
     progress = st.progress(0, text="Initializing folding engine...")
@@ -798,7 +835,7 @@ with card1:
         '<div class="pl-card-title">What this protein does</div>',
         unsafe_allow_html=True,
     )
-    if st.session_state["explanation"]:
+    if has_fold and st.session_state["explanation"]:
         excerpt = st.session_state["explanation"]
         st.markdown(f'<div class="pl-card-body pl-explain">{excerpt}</div>',
                     unsafe_allow_html=True)
@@ -820,7 +857,7 @@ with card2:
         '<div class="pl-card-title">For the field</div>',
         unsafe_allow_html=True,
     )
-    if st.session_state["msl_summary"]:
+    if has_fold and st.session_state["msl_summary"]:
         st.markdown(
             f'<div class="pl-card-body pl-explain">{st.session_state["msl_summary"]}</div>',
             unsafe_allow_html=True,
@@ -984,7 +1021,7 @@ with ins_right:
 # Full AI explanations (tabs)
 # ══════════════════════════════════════════════════════════════════════════════
 
-if st.session_state["explanation"] or st.session_state["msl_summary"]:
+if has_fold and (st.session_state["explanation"] or st.session_state["msl_summary"]):
     st.markdown("<div style='height:2rem;'></div>", unsafe_allow_html=True)
     st.markdown(
         '<div class="pl-card">'
