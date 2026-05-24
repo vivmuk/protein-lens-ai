@@ -165,6 +165,12 @@ except ImportError:
 
 from folding import fold_sequence, fetch_uniprot_sequence, FOLDING_BACKEND
 from explanation import get_scientific_explanation, get_msl_summary
+from presets import (
+    EXAMPLE_PROTEINS,
+    find_preset_by_label,
+    get_default_preset,
+    preset_select_label,
+)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -221,6 +227,13 @@ for key in ["pdb_string", "explanation", "msl_summary", "protein_name", "sequenc
     if key not in st.session_state:
         st.session_state[key] = None
 
+# Pre-load a default example so Railway users can fold immediately
+if st.session_state["sequence"] is None:
+    _default = get_default_preset()
+    st.session_state["sequence"] = _default["sequence"]
+    st.session_state["protein_name"] = _default["name"]
+    st.session_state["selected_preset_id"] = _default["id"]
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Header
@@ -237,7 +250,11 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Backend status
-backend_label = {"simplefold": "🍎 SimpleFold (Local MLX)", "esm": "🌐 ESMFold API (Fallback)"}.get(FOLDING_BACKEND, FOLDING_BACKEND)
+backend_label = {
+    "simplefold": "🍎 SimpleFold (Local MLX)",
+    "modal": "☁️ Modal GPU (SimpleFold)",
+    "esm": "🌐 ESMFold API (Fallback)",
+}.get(FOLDING_BACKEND, FOLDING_BACKEND)
 st.caption(f"Folding engine: **{backend_label}** &nbsp;|&nbsp; Explanation: **Venice AI** &nbsp;|&nbsp; Visualization: **py3Dmol**")
 
 
@@ -250,11 +267,48 @@ with st.sidebar:
 
     input_mode = st.radio(
         "Input method",
-        ["Paste sequence", "Search by name (UniProt)"],
+        ["Quick examples", "Paste sequence", "Search by name (UniProt)"],
         label_visibility="collapsed",
     )
 
-    if input_mode == "Search by name (UniProt)":
+    if input_mode == "Quick examples":
+        preset_labels = [preset_select_label(p) for p in EXAMPLE_PROTEINS]
+        default_idx = next(
+            (i for i, p in enumerate(EXAMPLE_PROTEINS) if p["id"] == st.session_state.get("selected_preset_id")),
+            0,
+        )
+        selected_label = st.selectbox(
+            "Choose a protein",
+            preset_labels,
+            index=default_idx,
+            help="Curated sequences — pick one and click FOLD & ANALYZE",
+        )
+        preset = find_preset_by_label(selected_label)
+        if preset:
+            st.session_state["sequence"] = preset["sequence"]
+            st.session_state["protein_name"] = preset["name"]
+            st.session_state["selected_preset_id"] = preset["id"]
+            st.caption(preset["description"])
+
+        st.text_area(
+            "Sequence (read-only)",
+            value=st.session_state["sequence"] or "",
+            height=100,
+            disabled=True,
+        )
+
+        st.markdown("**Try another quickly**")
+        quick_cols = st.columns(2)
+        for i, p in enumerate(EXAMPLE_PROTEINS):
+            col = quick_cols[i % 2]
+            short = p["name"].split("(")[0].strip()[:22]
+            if col.button(short, key=f"preset_quick_{p['id']}", use_container_width=True):
+                st.session_state["sequence"] = p["sequence"]
+                st.session_state["protein_name"] = p["name"]
+                st.session_state["selected_preset_id"] = p["id"]
+                st.rerun()
+
+    elif input_mode == "Search by name (UniProt)":
         protein_query = st.text_input(
             "Protein name",
             placeholder="e.g. insulin, hemoglobin, BRCA1",
@@ -290,15 +344,21 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("## ⚙️ Folding Settings")
 
-    if FOLDING_BACKEND == "simplefold":
+    if FOLDING_BACKEND in ("simplefold", "modal"):
         model_size = st.selectbox(
             "SimpleFold model size",
             ["simplefold_100M", "simplefold_360M", "simplefold_700M"],
             index=0,
             help="Larger models = better accuracy but slower inference",
         )
-        num_steps = st.slider("Inference steps", 100, 1000, 500, 100,
-                              help="More steps = higher quality, slower")
+        num_steps = st.slider(
+            "Inference steps",
+            100,
+            1000,
+            500,
+            100,
+            help="More steps = higher quality, slower",
+        )
     else:
         model_size = "esm_default"
         num_steps = 0
@@ -336,6 +396,7 @@ if fold_clicked:
         raw_seq = sequence_input if sequence_input else ""
         pname = protein_name_input or "Unknown protein"
     else:
+        # Quick examples + UniProt search both use session state
         raw_seq = st.session_state.get("sequence") or ""
         pname = st.session_state.get("protein_name") or "Unknown protein"
 
@@ -485,26 +546,31 @@ else:
         <div style="font-size:4rem; margin-bottom:1rem;">🔬</div>
         <h2 style="color:#58a6ff; font-weight:600;">Ready to fold</h2>
         <p style="max-width:500px; margin:0 auto; line-height:1.7;">
-            Enter a protein sequence or search by name in the sidebar,
-            then click <strong style="color:#e6edf3;">⚡ FOLD & ANALYZE</strong> to predict
-            the 3D structure and generate AI-powered scientific explanations.
+            <strong style="color:#e6edf3;">Insulin</strong> is already loaded in the sidebar under
+            <em>Quick examples</em>. Click
+            <strong style="color:#e6edf3;">⚡ FOLD & ANALYZE</strong> to run on your deployed backend.
         </p>
         <br>
         <div style="display:flex; justify-content:center; gap:1rem; flex-wrap:wrap; margin-top:1rem;">
-            <span style="background:#1f2d40; border:1px solid #1f6feb50; padding:0.4rem 1rem; border-radius:20px; font-size:0.85rem; color:#58a6ff;">🍎 SimpleFold (Apple)</span>
+            <span style="background:#1f2d40; border:1px solid #1f6feb50; padding:0.4rem 1rem; border-radius:20px; font-size:0.85rem; color:#58a6ff;">☁️ Modal GPU</span>
             <span style="background:#1f2d40; border:1px solid #1f6feb50; padding:0.4rem 1rem; border-radius:20px; font-size:0.85rem; color:#58a6ff;">🤖 Venice AI</span>
             <span style="background:#1f2d40; border:1px solid #1f6feb50; padding:0.4rem 1rem; border-radius:20px; font-size:0.85rem; color:#58a6ff;">🧊 3D py3Dmol</span>
             <span style="background:#1f2d40; border:1px solid #1f6feb50; padding:0.4rem 1rem; border-radius:20px; font-size:0.85rem; color:#58a6ff;">🏥 MSL Mode</span>
         </div>
-        <br>
-        <div style="background:#161b22; border:1px solid #30363d; border-radius:10px; padding:1.25rem; max-width:600px; margin:1.5rem auto 0; text-align:left;">
-            <p style="color:#8b949e; font-size:0.85rem; margin:0 0 0.5rem 0; font-weight:600;">🧪 Try these example proteins:</p>
-            <ul style="color:#c9d1d9; font-size:0.85rem; margin:0; padding-left:1.25rem; line-height:2;">
-                <li><strong style="color:#58a6ff;">Insulin</strong> — search by name</li>
-                <li><strong style="color:#58a6ff;">MVLSPADKTNVKAA...</strong> — hemoglobin alpha chain</li>
-                <li><strong style="color:#58a6ff;">GLP-1</strong> — glucagon-like peptide</li>
-                <li><strong style="color:#58a6ff;">EGFR</strong> — epidermal growth factor receptor</li>
-            </ul>
-        </div>
     </div>
     """, unsafe_allow_html=True)
+
+    st.markdown("##### 🧪 Example proteins (sidebar → Quick examples)")
+    example_cols = st.columns(3)
+    for i, preset in enumerate(EXAMPLE_PROTEINS):
+        col = example_cols[i % 3]
+        with col:
+            if st.button(
+                f"**{preset['name'].split('(')[0].strip()}**\n\n{len(preset['sequence'])} AA",
+                key=f"home_preset_{preset['id']}",
+                use_container_width=True,
+            ):
+                st.session_state["sequence"] = preset["sequence"]
+                st.session_state["protein_name"] = preset["name"]
+                st.session_state["selected_preset_id"] = preset["id"]
+                st.rerun()
