@@ -165,8 +165,8 @@ def _fold_modal(sequence: str, model: str = "simplefold_100M", num_steps: int = 
     token_id = os.environ["MODAL_TOKEN_ID"]
     token_secret = os.environ["MODAL_TOKEN_SECRET"]
 
-    # Import the deployed function
-    fold_fn = modal.Function.lookup("protein-lens-ai", "fold_protein_modal")
+    # Call deployed function (Modal 1.0+: from_name replaces removed .lookup)
+    fold_fn = modal.Function.from_name("protein-lens-ai", "fold_protein_modal")
     result = fold_fn.remote(sequence, model=model, num_steps=num_steps)
     return result["pdb_string"], result["confidence"]
 

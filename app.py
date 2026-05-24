@@ -3,6 +3,7 @@ ProteinLens AI — Main Streamlit Application
 AI-powered protein folding, visualization, and scientific explanation platform.
 """
 
+import html
 import streamlit as st
 import requests
 import json
@@ -104,13 +105,133 @@ st.markdown("""
     box-shadow: 0 4px 12px #1f6feb50;
   }
 
+  /* ── Readable text (sidebar + main) ───────────────────────────────────── */
+  .stApp, .main, section[data-testid="stSidebar"] {
+    color: #e6edf3;
+  }
+
+  section[data-testid="stSidebar"] label,
+  section[data-testid="stSidebar"] label p,
+  section[data-testid="stSidebar"] .stMarkdown p,
+  section[data-testid="stSidebar"] .stMarkdown li,
+  section[data-testid="stSidebar"] .stRadio label {
+    color: #e6edf3 !important;
+  }
+
+  section[data-testid="stSidebar"] .stMarkdown strong {
+    color: #ffffff !important;
+  }
+
+  /* Captions, help, tooltips */
+  .stCaption,
+  [data-testid="stCaptionContainer"],
+  [data-testid="stCaptionContainer"] p,
+  [data-testid="stTooltipIcon"],
+  small {
+    color: #b1bac4 !important;
+  }
+
+  /* Widget labels */
+  [data-testid="stWidgetLabel"] p,
+  [data-testid="stWidgetLabel"] label {
+    color: #e6edf3 !important;
+    font-weight: 500 !important;
+  }
+
+  /* Preset description chip */
+  .preset-description {
+    color: #c9d1d9 !important;
+    background: #21262d;
+    border: 1px solid #484f58;
+    border-radius: 6px;
+    padding: 0.5rem 0.75rem;
+    margin: 0.25rem 0 0.75rem 0;
+    font-size: 0.85rem;
+    line-height: 1.5;
+  }
+
+  /* Sequence code block */
+  .sequence-display {
+    background: #21262d !important;
+    border: 1px solid #484f58 !important;
+    border-radius: 6px;
+    padding: 0.75rem 1rem;
+    font-family: 'JetBrains Mono', monospace !important;
+    font-size: 0.8rem !important;
+    color: #79c0ff !important;
+    word-break: break-all;
+    line-height: 1.6;
+    margin-bottom: 0.75rem;
+  }
+
   /* Text areas & inputs */
-  .stTextArea textarea, .stTextInput input, .stSelectbox select {
-    background-color: #0d1117 !important;
-    border: 1px solid #30363d !important;
+  .stTextArea textarea,
+  .stTextInput input {
+    background-color: #21262d !important;
+    border: 1px solid #484f58 !important;
     color: #e6edf3 !important;
     font-family: 'JetBrains Mono', monospace;
     border-radius: 6px;
+    caret-color: #58a6ff;
+  }
+
+  /* Disabled / read-only — Streamlit dims these by default */
+  .stTextArea textarea:disabled,
+  .stTextArea textarea[disabled],
+  .stTextInput input:disabled {
+    color: #e6edf3 !important;
+    -webkit-text-fill-color: #e6edf3 !important;
+    background-color: #21262d !important;
+    opacity: 1 !important;
+  }
+
+  /* Selectbox */
+  [data-baseweb="select"] > div,
+  [data-baseweb="select"] div[role="combobox"],
+  [data-baseweb="select"] span {
+    color: #e6edf3 !important;
+    background-color: #21262d !important;
+  }
+
+  [data-baseweb="popover"] li,
+  [data-baseweb="menu"] li {
+    color: #e6edf3 !important;
+    background-color: #161b22 !important;
+  }
+
+  /* Placeholders */
+  .stTextArea textarea::placeholder,
+  .stTextInput input::placeholder {
+    color: #8b949e !important;
+    opacity: 1 !important;
+  }
+
+  /* Code blocks (st.code) */
+  .stCode, .stCode pre, .stCode code,
+  [data-testid="stCode"] pre,
+  [data-testid="stCode"] code {
+    background-color: #21262d !important;
+    color: #79c0ff !important;
+    border: 1px solid #484f58 !important;
+  }
+
+  /* Status line under header */
+  .engine-status {
+    color: #b1bac4 !important;
+    font-size: 0.9rem;
+  }
+  .engine-status strong {
+    color: #58a6ff !important;
+  }
+
+  /* Radio circles */
+  .stRadio [data-baseweb="radio"] div {
+    color: #e6edf3 !important;
+  }
+
+  /* Slider labels */
+  .stSlider label, .stSlider [data-testid="stMarkdownContainer"] p {
+    color: #e6edf3 !important;
   }
 
   /* Tabs */
@@ -255,7 +376,11 @@ backend_label = {
     "modal": "☁️ Modal GPU (SimpleFold)",
     "esm": "🌐 ESMFold API (Fallback)",
 }.get(FOLDING_BACKEND, FOLDING_BACKEND)
-st.caption(f"Folding engine: **{backend_label}** &nbsp;|&nbsp; Explanation: **Venice AI** &nbsp;|&nbsp; Visualization: **py3Dmol**")
+st.markdown(
+    f'<p class="engine-status">Folding engine: <strong>{backend_label}</strong> &nbsp;|&nbsp; '
+    f'Explanation: <strong>Venice AI</strong> &nbsp;|&nbsp; Visualization: <strong>py3Dmol</strong></p>',
+    unsafe_allow_html=True,
+)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -288,13 +413,16 @@ with st.sidebar:
             st.session_state["sequence"] = preset["sequence"]
             st.session_state["protein_name"] = preset["name"]
             st.session_state["selected_preset_id"] = preset["id"]
-            st.caption(preset["description"])
+            st.markdown(
+                f'<p class="preset-description">{preset["description"]}</p>',
+                unsafe_allow_html=True,
+            )
 
-        st.text_area(
-            "Sequence (read-only)",
-            value=st.session_state["sequence"] or "",
-            height=100,
-            disabled=True,
+        st.markdown("**Sequence**")
+        seq_preview = st.session_state["sequence"] or ""
+        st.markdown(
+            f'<pre class="sequence-display">{html.escape(seq_preview)}</pre>',
+            unsafe_allow_html=True,
         )
 
         st.markdown("**Try another quickly**")
@@ -324,11 +452,10 @@ with st.sidebar:
                 st.error("Protein not found. Try a different name.")
 
         if st.session_state["sequence"]:
-            st.text_area(
-                "Fetched sequence",
-                value=st.session_state["sequence"],
-                height=100,
-                disabled=True,
+            st.markdown("**Fetched sequence**")
+            st.markdown(
+                f'<pre class="sequence-display">{html.escape(st.session_state["sequence"])}</pre>',
+                unsafe_allow_html=True,
             )
     else:
         sequence_input = st.text_area(

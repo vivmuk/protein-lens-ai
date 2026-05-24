@@ -4,12 +4,14 @@ modal_backend.py — Optional Modal cloud GPU backend for ProteinLens AI.
 Deploys SimpleFold as a serverless GPU function on Modal.
 Use this when you want cloud-scale inference (larger models, no local GPU needed).
 
-Deploy:
+Deploy (wait until ALL image steps finish — 10–20+ min first time):
     modal deploy modal_backend.py
 
-Call from app:
-    from modal_backend import fold_on_modal
-    pdb, confidence = fold_on_modal(sequence, model="simplefold_700M")
+Smoke test (keep terminal open, or use --detach):
+    modal run --detach modal_backend.py
+
+Do NOT use `modal run` without deploy for Railway — Railway calls the deployed app via
+Function.from_name("protein-lens-ai", "fold_protein_modal").
 
 Requirements:
     pip install modal
@@ -22,21 +24,25 @@ import os
 # ── Modal app definition ───────────────────────────────────────────────────────
 app = modal.App("protein-lens-ai")
 
-# Docker image: install SimpleFold with PyTorch (cloud GPU = CUDA, not MLX)
+# Docker image: SimpleFold + PyTorch (CUDA). Pin versions — torch>=2.0 pulled 2.12 + 2GB CUDA13.
+_PYTORCH_INDEX = "https://download.pytorch.org/whl/cu124"
+
 simplefold_image = (
     modal.Image.debian_slim(python_version="3.10")
-    .apt_install("git", "wget", "curl")
+    .apt_install("git", "wget", "curl", "build-essential", "libxrender1", "libxext6")
     .pip_install(
-        "torch>=2.0.0",
-        "numpy",
-        "biopython",
+        "torch==2.5.1",
+        "numpy>=1.26,<2",
+        "biopython==1.85",
         "requests",
+        extra_options=f"--extra-index-url {_PYTORCH_INDEX}",
     )
     .run_commands(
-        # Install SimpleFold directly from GitHub
-        "pip install git+https://github.com/apple/ml-simplefold.git",
-        # Install ESM dependency for tokenization
-        "pip install git+https://github.com/facebookresearch/esm.git",
+        # SimpleFold pulls lightning, rdkit, biotite, etc. — slow but one-time per image.
+        "pip install 'git+https://github.com/apple/ml-simplefold.git'",
+        "pip install 'git+https://github.com/facebookresearch/esm.git'",
+        # Verify CLI is on PATH before deploy is considered good
+        "simplefold --help",
     )
 )
 
