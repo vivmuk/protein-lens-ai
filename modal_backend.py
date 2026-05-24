@@ -112,8 +112,8 @@ def setup_weights(model: str = "simplefold_100M"):
 @app.function(
     image=simplefold_image,
     gpu="A10G",             # 24 GB VRAM — T4 (16 GB) OOMs on simplefold_100M + pLDDT
-    timeout=600,
-    retries=1,
+    timeout=1800,           # 30 min — cold start (ESM + SimpleFold + pLDDT load) can eat 5+ min before steps even begin
+    retries=0,              # a 540s timeout that retries just doubles cost with no new info
     memory=16384,
     volumes={_MODEL_CACHE: model_vol},
 )
@@ -122,7 +122,23 @@ def fold_protein_modal(
     model: str = "simplefold_100M",
     num_steps: int = 200,
 ) -> dict:
-    import subprocess, tempfile, os
+    import subprocess, tempfile, os, time, threading
+
+    # Diagnostic: show what's actually cached in the volume so we can tell
+    # cold-download from warm-load when something is slow.
+    try:
+        cached = []
+        for sub in ("huggingface", "torch", "simplefold"):
+            p = os.path.join(_MODEL_CACHE, sub)
+            if os.path.isdir(p):
+                total = sum(
+                    os.path.getsize(os.path.join(r, f))
+                    for r, _, fs in os.walk(p) for f in fs
+                )
+                cached.append(f"{sub}={total / 1e9:.2f} GB")
+        print(f"[modal_backend] model-cache state: {', '.join(cached) or '<empty>'}")
+    except Exception as e:
+        print(f"[modal_backend] could not stat cache: {e}")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         fasta_path = os.path.join(tmpdir, "input.fasta")
@@ -132,36 +148,66 @@ def fold_protein_modal(
         output_dir = os.path.join(tmpdir, "output")
         os.makedirs(output_dir)
 
-        # Run SimpleFold from the tmpdir so any files it writes relative to
-        # CWD (some versions do this for the pLDDT side-car) land where we
-        # can find them.
-        result = subprocess.run(
-            [
-                "simplefold",
-                "--simplefold_model", model,
-                "--num_steps", str(num_steps),
-                "--tau", "0.01",
-                "--nsample_per_protein", "1",
-                "--plddt",
-                "--fasta_path", fasta_path,
-                "--output_dir", output_dir,
-                "--backend", "torch",
-            ],
-            capture_output=True,
+        cmd = [
+            "simplefold",
+            "--simplefold_model", model,
+            "--num_steps", str(num_steps),
+            "--tau", "0.01",
+            "--nsample_per_protein", "1",
+            "--plddt",
+            "--fasta_path", fasta_path,
+            "--output_dir", output_dir,
+            "--backend", "torch",
+        ]
+        print(f"[modal_backend] running: {' '.join(cmd)}")
+
+        # Stream stdout+stderr live so Modal logs show progress; otherwise a
+        # hang inside SimpleFold is invisible until the subprocess timeout fires.
+        start = time.monotonic()
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
-            timeout=540,
+            bufsize=1,
             cwd=tmpdir,
         )
 
-        # Always log so failures are diagnosable in Modal logs.
-        if result.stdout:
-            print("SimpleFold stdout:\n" + result.stdout[-2000:])
-        if result.stderr:
-            print("SimpleFold stderr:\n" + result.stderr[-2000:])
+        tail_lines: list[str] = []  # keep last N lines for the error path
+        def _pump():
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                line = line.rstrip()
+                tail_lines.append(line)
+                if len(tail_lines) > 200:
+                    del tail_lines[: len(tail_lines) - 200]
+                print(f"[simplefold] {line}")
 
-        if result.returncode != 0:
+        pump_thread = threading.Thread(target=_pump, daemon=True)
+        pump_thread.start()
+
+        SUBPROC_TIMEOUT = 1700  # leave ~100s buffer under the 1800s function timeout
+        try:
+            proc.wait(timeout=SUBPROC_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=10)
+            pump_thread.join(timeout=5)
+            elapsed = time.monotonic() - start
             raise RuntimeError(
-                f"SimpleFold error (code {result.returncode}):\n{result.stderr[-800:]}"
+                f"SimpleFold timed out after {elapsed:.0f}s "
+                f"(num_steps={num_steps}, seq_len={len(sequence)}).\n"
+                f"--- last output ---\n" + "\n".join(tail_lines[-50:])
+            )
+
+        pump_thread.join(timeout=5)
+        elapsed = time.monotonic() - start
+        print(f"[modal_backend] simplefold finished in {elapsed:.1f}s, exit={proc.returncode}")
+
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"SimpleFold error (code {proc.returncode}):\n"
+                + "\n".join(tail_lines[-50:])
             )
 
         # Walk the whole tmpdir (not just output_dir) — some versions write
