@@ -1,29 +1,25 @@
 """
-modal_backend.py — Optional Modal cloud GPU backend for ProteinLens AI.
+modal_backend.py — Modal cloud GPU backend for ProteinLens AI.
 
-Deploys SimpleFold as a serverless GPU function on Modal.
-Use this when you want cloud-scale inference (larger models, no local GPU needed).
+FIRST-TIME SETUP (run once to pre-download model weights into the volume):
+    modal run modal_backend.py::setup_weights
 
-Deploy:
+Then deploy and keep it running:
     modal deploy modal_backend.py
-
-Requirements:
-    pip install modal
-    modal token new   # authenticate via browser
 """
 
 import modal
 import os
 
-# ── Modal app definition ───────────────────────────────────────────────────────
 app = modal.App("protein-lens-ai")
 
 _PYTORCH_INDEX = "https://download.pytorch.org/whl/cu124"
 
-# HuggingFace cache dir — mounted from a persistent volume so SimpleFold weights
-# survive across container restarts. Without this, each cold start re-downloads
-# the pLDDT checkpoint and corrupts it if the container is killed mid-download.
-_HF_CACHE = "/root/.cache/huggingface"
+# Persistent volume — SimpleFold writes its downloaded weights here.
+# Without this, every cold container re-downloads and risks mid-download corruption.
+# Must be a path that does NOT exist in the base image — Modal refuses to mount
+# a volume over a non-empty directory.
+_MODEL_CACHE = "/model-cache"
 model_vol = modal.Volume.from_name("simplefold-weights", create_if_missing=True)
 
 simplefold_image = (
@@ -34,7 +30,6 @@ simplefold_image = (
         "numpy>=1.26,<2",
         "biopython==1.85",
         "requests",
-        "huggingface_hub",
         extra_options=f"--extra-index-url {_PYTORCH_INDEX}",
     )
     .run_commands(
@@ -42,11 +37,63 @@ simplefold_image = (
         "pip install 'git+https://github.com/facebookresearch/esm.git'",
         "simplefold --help",
     )
-    .env({"HF_HOME": _HF_CACHE})
+    .env({"HF_HOME": _MODEL_CACHE, "TORCH_HOME": _MODEL_CACHE})
 )
 
 
-# ── Modal serverless function ──────────────────────────────────────────────────
+# ── One-time weight download ───────────────────────────────────────────────────
+
+@app.function(
+    image=simplefold_image,
+    gpu="T4",
+    timeout=1800,           # 30 min — enough for a full model download
+    volumes={_MODEL_CACHE: model_vol},
+)
+def setup_weights(model: str = "simplefold_100M"):
+    """
+    Run SimpleFold on a tiny sequence to trigger weight download into the volume.
+    Run this ONCE before your first inference call:
+
+        modal run modal_backend.py::setup_weights
+    """
+    import subprocess, tempfile, os
+
+    print(f"Downloading {model} weights into volume...")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        fasta_path = os.path.join(tmpdir, "input.fasta")
+        with open(fasta_path, "w") as f:
+            f.write(">warmup\nACDEFGHIKLMNPQRSTVWY\n")   # 20-AA test sequence
+
+        output_dir = os.path.join(tmpdir, "out")
+        os.makedirs(output_dir)
+
+        result = subprocess.run(
+            [
+                "simplefold",
+                "--simplefold_model", model,
+                "--num_steps", "10",           # minimum steps — we only need the download
+                "--fasta_path", fasta_path,
+                "--output_dir", output_dir,
+                "--backend", "torch",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=1700,
+        )
+
+    if result.returncode == 0:
+        print(f"✓ Weights for {model} downloaded and cached in volume.")
+    else:
+        print(f"✗ Download failed (exit {result.returncode}).")
+        print(result.stderr[-1000:])
+        raise RuntimeError("Weight download failed — see stderr above.")
+
+    # Flush volume so weights persist immediately
+    model_vol.commit()
+
+
+# ── Inference function ─────────────────────────────────────────────────────────
 
 @app.function(
     image=simplefold_image,
@@ -54,25 +101,14 @@ simplefold_image = (
     timeout=600,
     retries=1,
     memory=8192,
-    volumes={_HF_CACHE: model_vol},
+    volumes={_MODEL_CACHE: model_vol},
 )
 def fold_protein_modal(
     sequence: str,
     model: str = "simplefold_100M",
     num_steps: int = 500,
 ) -> dict:
-    import subprocess
-    import tempfile
-    import os
-    from huggingface_hub import snapshot_download
-
-    # Download weights into the volume on first call; HF hub verifies hashes so
-    # a corrupted partial file is detected and re-fetched automatically.
-    # Subsequent calls hit the volume cache and skip this entirely.
-    snapshot_download(
-        "apple/ml-simplefold",
-        ignore_patterns=["*360M*", "*700M*", "*1.1B*", "*1.6B*", "*3B*"],
-    )
+    import subprocess, tempfile, os
 
     with tempfile.TemporaryDirectory() as tmpdir:
         fasta_path = os.path.join(tmpdir, "input.fasta")
@@ -82,20 +118,18 @@ def fold_protein_modal(
         output_dir = os.path.join(tmpdir, "output")
         os.makedirs(output_dir)
 
-        cmd = [
-            "simplefold",
-            "--simplefold_model", model,
-            "--num_steps", str(num_steps),
-            "--tau", "0.01",
-            "--nsample_per_protein", "1",
-            "--plddt",
-            "--fasta_path", fasta_path,
-            "--output_dir", output_dir,
-            "--backend", "torch",
-        ]
-
         result = subprocess.run(
-            cmd,
+            [
+                "simplefold",
+                "--simplefold_model", model,
+                "--num_steps", str(num_steps),
+                "--tau", "0.01",
+                "--nsample_per_protein", "1",
+                "--plddt",
+                "--fasta_path", fasta_path,
+                "--output_dir", output_dir,
+                "--backend", "torch",
+            ],
             capture_output=True,
             text=True,
             timeout=540,
@@ -129,7 +163,7 @@ def fold_protein_modal(
         return {"pdb_string": pdb_string, "confidence": confidence, "model": model}
 
 
-# ── Convenience wrapper for local Streamlit app ───────────────────────────────
+# ── Convenience wrapper ────────────────────────────────────────────────────────
 
 def fold_on_modal(
     sequence: str,
@@ -140,13 +174,11 @@ def fold_on_modal(
     return result["pdb_string"], result["confidence"]
 
 
-# ── Local test entrypoint ──────────────────────────────────────────────────────
+# ── Local smoke test ───────────────────────────────────────────────────────────
 
 @app.local_entrypoint()
 def test():
-    """Quick smoke test: fold a tiny peptide."""
     test_seq = "ACDEFGHIKLMNPQRSTVWY"
-    print(f"Testing Modal fold with sequence length {len(test_seq)}...")
+    print(f"Testing Modal fold ({len(test_seq)} AA)...")
     result = fold_protein_modal.remote(test_seq, model="simplefold_100M", num_steps=100)
-    print(f"Success! Confidence: {result['confidence']:.1%}")
-    print(f"PDB lines: {len(result['pdb_string'].splitlines())}")
+    print(f"Confidence: {result['confidence']:.1%}  |  PDB lines: {len(result['pdb_string'].splitlines())}")
