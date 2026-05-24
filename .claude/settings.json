@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell($env:PYTHONIOENCODING='utf-8'; $env:PYTHONUTF8='1'; python -m modal run modal_backend.py::test 2>&1 | Select-Object -Last 80)",
+      "PowerShell($env:PYTHONIOENCODING='utf-8'; $env:PYTHONUTF8='1'; python -m modal app list 2>$null | Select-String -Pattern 'protein-lens|ephemeral|running' | Select-Object -First 10)",
+      "PowerShell($env:PYTHONIOENCODING='utf-8'; $env:PYTHONUTF8='1'; python -m modal app logs ap-KvBmjUdxcWIt85rQIZQ5kU 2>$null | Select-Object -Last 40)",
+      "PowerShell($env:PYTHONIOENCODING='utf-8'; $env:PYTHONUTF8='1'; python -m modal app logs ap-KvBmjUdxcWIt85rQIZQ5kU 2>$null | Select-Object -Last 8)",
+      "PowerShell(python -c \"import ast; ast.parse\\(open\\('modal_backend.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "PowerShell($env:PYTHONIOENCODING='utf-8'; $env:PYTHONUTF8='1'; python -m modal app logs ap-KvBmjUdxcWIt85rQIZQ5kU 2>$null | Select-Object -Last 6)",
+      "PowerShell($env:PYTHONIOENCODING='utf-8'; $env:PYTHONUTF8='1'; python -m modal deploy modal_backend.py 2>&1 | Select-Object -Last 20)",
+      "PowerShell($env:PYTHONIOENCODING='utf-8'; $env:PYTHONUTF8='1'; python -m modal run --detach modal_backend.py::setup_weights 2>&1 | Select-Object -Last 30)",
+      "PowerShell($env:PYTHONIOENCODING='utf-8'; $env:PYTHONUTF8='1'; python -m modal deploy modal_backend.py 2>&1 | Select-Object -Last 10)",
+      "PowerShell($env:PYTHONIOENCODING='utf-8'; $env:PYTHONUTF8='1'; python -m modal run --detach modal_backend.py::setup_weights 2>&1 | Select-Object -Last 20)",
+      "PowerShell($env:PYTHONIOENCODING='utf-8'; $env:PYTHONUTF8='1'; python -m modal deploy modal_backend.py 2>&1 | Select-Object -Last 60)",
+      "PowerShell($env:PYTHONIOENCODING='utf-8'; $env:PYTHONUTF8='1'; python -m modal run --detach modal_backend.py::setup_weights 2>&1 | Select-Object -Last 15)",
+      "PowerShell($env:PYTHONIOENCODING='utf-8'; $env:PYTHONUTF8='1'; python -m modal app list 2>$null | Select-Object -First 15)",
+      "PowerShell($env:PYTHONIOENCODING='utf-8'; $env:PYTHONUTF8='1'; python -m modal app logs ap-czYtv101KpBU540tnKSOPa 2>$null | Select-Object -Last 30)",
+      "PowerShell($env:PYTHONIOENCODING='utf-8'; $env:PYTHONUTF8='1'; python -m modal app list 2>$null | Select-String -Pattern 'protein-lens' | Select-Object -First 3)",
+      "PowerShell($env:PYTHONIOENCODING='utf-8'; $env:PYTHONUTF8='1'; python -m modal app list 2>$null | Select-Object -First 12)",
+      "PowerShell($env:PYTHONIOENCODING='utf-8'; $env:PYTHONUTF8='1'; python -m modal app logs ap-RuO6pREZakurhS27lBF5Kt 2>$null | Select-Object -Last 20)",
+      "PowerShell($env:PYTHONIOENCODING='utf-8'; $env:PYTHONUTF8='1'; python -m modal deploy modal_backend.py 2>&1 | Select-Object -Last 8)",
+      "PowerShell($env:PYTHONIOENCODING='utf-8'; $env:PYTHONUTF8='1'; python -m modal run modal_backend.py::test 2>&1 | Select-Object -Last 20)",
+      "PowerShell($env:PYTHONIOENCODING='utf-8'; $env:PYTHONUTF8='1'; python -m modal run modal_backend.py::test 2>&1 | Select-Object -Last 30)",
+      "PowerShell($env:PYTHONIOENCODING='utf-8'; $env:PYTHONUTF8='1'; python -m modal run modal_backend.py::test 2>&1 | Select-Object -Last 10)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(python -c ' *)"
+    ]
+  }
+}

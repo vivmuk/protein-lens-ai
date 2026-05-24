@@ -136,9 +136,9 @@ def _run_simplefold(
 
 @app.function(
     image=simplefold_image,
-    gpu="A10G",
+    gpu="A100",
     timeout=1800,
-    memory=16384,
+    memory=32768,
     volumes={_MODEL_CACHE: model_vol},
 )
 def setup_weights(model: str = "simplefold_100M"):
@@ -181,10 +181,10 @@ def setup_weights(model: str = "simplefold_100M"):
 
 @app.function(
     image=simplefold_image,
-    gpu="A10G",             # 24 GB VRAM — T4 (16 GB) OOMs on 100M + pLDDT
+    gpu="A100",             # 40 GB VRAM — A10G (22 GB) OOMs: ESM-2 3B + SimpleFold + pLDDT = ~22 GB
     timeout=1800,           # generous for first-ever cold container that has to download
     retries=0,
-    memory=16384,
+    memory=32768,
     volumes={_MODEL_CACHE: model_vol},
     scaledown_window=300,   # keep container warm for 5 min after a fold
 )
