@@ -1,24 +1,25 @@
 """
 modal_backend.py — Modal cloud GPU backend for ProteinLens AI.
 
-FIRST-TIME SETUP (run once to pre-download model weights into the volume):
-    modal run modal_backend.py::setup_weights
+Uses the `simplefold` CLI in a subprocess and points its checkpoint cache at
+a persistent Modal volume so the ~6 GB weight download only happens once.
 
-Then deploy and keep it running:
-    modal deploy modal_backend.py
+FIRST-TIME SETUP — pre-download weights into the volume:
+    python -m modal run modal_backend.py::setup_weights
+
+Then deploy:
+    python -m modal deploy modal_backend.py
 """
 
 import modal
-import os
 
 app = modal.App("protein-lens-ai")
 
 _PYTORCH_INDEX = "https://download.pytorch.org/whl/cu124"
 
-# Persistent volume — SimpleFold writes its downloaded weights here.
-# Without this, every cold container re-downloads and risks mid-download corruption.
-# Must be a path that does NOT exist in the base image — Modal refuses to mount
-# a volume over a non-empty directory.
+# Persistent volume — SimpleFold writes its weights here. Without this, every
+# cold container re-downloads ~6 GB (~15 min). Must be a path that does NOT
+# exist in the base image — Modal refuses to mount over a non-empty dir.
 _MODEL_CACHE = "/model-cache"
 model_vol = modal.Volume.from_name("simplefold-weights", create_if_missing=True)
 
@@ -35,75 +36,144 @@ simplefold_image = (
     .run_commands(
         "pip install 'git+https://github.com/apple/ml-simplefold.git'",
         "pip install 'git+https://github.com/facebookresearch/esm.git'",
-        "simplefold --help",
+        "simplefold --help",  # bake the CLI help into the image to surface install errors at build time
     )
     .env({
-        "HF_HOME": _MODEL_CACHE,
+        # ESM uses TORCH_HOME for its hub cache — point it at the volume too.
         "TORCH_HOME": _MODEL_CACHE,
+        "HF_HOME": _MODEL_CACHE,
         "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
     })
 )
+
+
+def _run_simplefold(
+    *,
+    sequence: str,
+    model: str,
+    num_steps: int,
+    tmpdir: str,
+    output_dir: str,
+) -> tuple[int, list[str]]:
+    """
+    Run the simplefold CLI with weights cached to the persistent volume.
+    Streams stdout/stderr live to Modal logs and returns (exit_code, tail_lines).
+    """
+    import os, subprocess, threading, time
+
+    fasta_path = os.path.join(tmpdir, "input.fasta")
+    with open(fasta_path, "w") as f:
+        f.write(f">protein\n{sequence}\n")
+
+    # The pLDDT path internally uses the `boltz` library, which downloads CCD
+    # dict + boltz1_conf.ckpt to {output_dir}/cache/ — hardcoded, no CLI flag
+    # exposes it. Trick: symlink that subdir to a persistent location on the
+    # volume so boltz's writes land in the cache and subsequent runs hit it.
+    aux_cache = os.path.join(_MODEL_CACHE, "aux", "boltz_cache")
+    os.makedirs(aux_cache, exist_ok=True)
+    cache_link = os.path.join(output_dir, "cache")
+    if not os.path.lexists(cache_link):
+        os.symlink(aux_cache, cache_link)
+
+    cmd = [
+        "simplefold",
+        "--simplefold_model", model,
+        "--num_steps", str(num_steps),
+        "--tau", "0.05",
+        "--nsample_per_protein", "1",
+        "--plddt",
+        "--ckpt_dir", _MODEL_CACHE,        # main SimpleFold + pLDDT weights → volume
+        "--fasta_path", fasta_path,
+        "--output_dir", output_dir,
+        "--output_format", "pdb",          # skip CIF→PDB conversion
+        "--backend", "torch",
+    ]
+    print(f"[modal_backend] running: {' '.join(cmd)}")
+
+    start = time.monotonic()
+    # Run from _MODEL_CACHE so any relative paths SimpleFold uses also land on the volume.
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+        cwd=_MODEL_CACHE,
+    )
+
+    tail: list[str] = []
+    def _pump():
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            line = line.rstrip()
+            tail.append(line)
+            if len(tail) > 200:
+                del tail[: len(tail) - 200]
+            print(f"[simplefold] {line}")
+    t = threading.Thread(target=_pump, daemon=True)
+    t.start()
+
+    try:
+        proc.wait(timeout=1700)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=10)
+        t.join(timeout=5)
+        elapsed = time.monotonic() - start
+        raise RuntimeError(
+            f"simplefold timed out after {elapsed:.0f}s "
+            f"(num_steps={num_steps}, seq_len={len(sequence)})\n"
+            + "\n".join(tail[-50:])
+        )
+
+    t.join(timeout=5)
+    elapsed = time.monotonic() - start
+    print(f"[modal_backend] simplefold finished in {elapsed:.1f}s, exit={proc.returncode}")
+    return proc.returncode, tail
 
 
 # ── One-time weight download ───────────────────────────────────────────────────
 
 @app.function(
     image=simplefold_image,
-    gpu="A10G",             # same GPU as inference so pLDDT init exercises the full path
+    gpu="A10G",
     timeout=1800,
     memory=16384,
     volumes={_MODEL_CACHE: model_vol},
 )
 def setup_weights(model: str = "simplefold_100M"):
     """
-    Run SimpleFold (with --plddt) on a tiny sequence to download BOTH the main
-    model and the pLDDT checkpoint into the volume.
+    Pre-download SimpleFold + pLDDT + ESM weights into the volume.
 
-        modal run modal_backend.py::setup_weights
+        python -m modal run modal_backend.py::setup_weights
     """
-    import subprocess, tempfile, os, shutil
+    import os, tempfile
 
-    # Wipe any half-finished checkpoints left over from a previous failed run
-    # so HF/torch re-downloads them cleanly.
-    for sub in ("huggingface", "torch", "simplefold"):
-        path = os.path.join(_MODEL_CACHE, sub)
-        if os.path.exists(path):
-            print(f"Clearing stale cache: {path}")
-            shutil.rmtree(path, ignore_errors=True)
-
-    print(f"Downloading {model} + pLDDT weights into volume...")
-
+    os.makedirs(_MODEL_CACHE, exist_ok=True)
     with tempfile.TemporaryDirectory() as tmpdir:
-        fasta_path = os.path.join(tmpdir, "input.fasta")
-        with open(fasta_path, "w") as f:
-            f.write(">warmup\nACDEFGHIKLMNPQRSTVWY\n")   # 20-AA test sequence
-
         output_dir = os.path.join(tmpdir, "out")
         os.makedirs(output_dir)
-
-        result = subprocess.run(
-            [
-                "simplefold",
-                "--simplefold_model", model,
-                "--num_steps", "50",
-                "--plddt",                     # CRITICAL — without this, pLDDT checkpoint is never downloaded
-                "--fasta_path", fasta_path,
-                "--output_dir", output_dir,
-                "--backend", "torch",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=1700,
+        rc, tail = _run_simplefold(
+            sequence="ACDEFGHIKLMNPQRSTVWY",
+            model=model,
+            num_steps=20,
+            tmpdir=tmpdir,
+            output_dir=output_dir,
         )
 
-    if result.returncode == 0:
-        print(f"✓ Weights for {model} downloaded and cached in volume.")
-    else:
-        print(f"✗ Download failed (exit {result.returncode}).")
-        print(result.stderr[-1000:])
-        raise RuntimeError("Weight download failed — see stderr above.")
+    if rc != 0:
+        raise RuntimeError(
+            f"setup_weights: simplefold failed (exit {rc}):\n" + "\n".join(tail[-50:])
+        )
 
-    # Flush volume so weights persist immediately
+    total = 0
+    for root, _, files in os.walk(_MODEL_CACHE):
+        for fname in files:
+            try:
+                total += os.path.getsize(os.path.join(root, fname))
+            except OSError:
+                pass
+    print(f"[setup_weights] volume now holds {total / 1e9:.2f} GB")
     model_vol.commit()
 
 
@@ -111,107 +181,48 @@ def setup_weights(model: str = "simplefold_100M"):
 
 @app.function(
     image=simplefold_image,
-    gpu="A10G",             # 24 GB VRAM — T4 (16 GB) OOMs on simplefold_100M + pLDDT
-    timeout=1800,           # 30 min — cold start (ESM + SimpleFold + pLDDT load) can eat 5+ min before steps even begin
-    retries=0,              # a 540s timeout that retries just doubles cost with no new info
+    gpu="A10G",             # 24 GB VRAM — T4 (16 GB) OOMs on 100M + pLDDT
+    timeout=1800,           # generous for first-ever cold container that has to download
+    retries=0,
     memory=16384,
     volumes={_MODEL_CACHE: model_vol},
+    scaledown_window=300,   # keep container warm for 5 min after a fold
 )
 def fold_protein_modal(
     sequence: str,
     model: str = "simplefold_100M",
     num_steps: int = 200,
 ) -> dict:
-    import subprocess, tempfile, os, time, threading
+    import os, tempfile
 
-    # Diagnostic: show what's actually cached in the volume so we can tell
-    # cold-download from warm-load when something is slow.
-    try:
-        cached = []
-        for sub in ("huggingface", "torch", "simplefold"):
-            p = os.path.join(_MODEL_CACHE, sub)
-            if os.path.isdir(p):
-                total = sum(
-                    os.path.getsize(os.path.join(r, f))
-                    for r, _, fs in os.walk(p) for f in fs
-                )
-                cached.append(f"{sub}={total / 1e9:.2f} GB")
-        print(f"[modal_backend] model-cache state: {', '.join(cached) or '<empty>'}")
-    except Exception as e:
-        print(f"[modal_backend] could not stat cache: {e}")
+    # Log cache state so we can tell warm vs cold downloads.
+    if os.path.isdir(_MODEL_CACHE):
+        try:
+            total = sum(
+                os.path.getsize(os.path.join(r, f))
+                for r, _, fs in os.walk(_MODEL_CACHE) for f in fs
+            )
+            print(f"[modal_backend] /model-cache contains {total / 1e9:.2f} GB")
+        except OSError as e:
+            print(f"[modal_backend] could not stat cache: {e}")
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        fasta_path = os.path.join(tmpdir, "input.fasta")
-        with open(fasta_path, "w") as f:
-            f.write(f">protein\n{sequence}\n")
-
         output_dir = os.path.join(tmpdir, "output")
         os.makedirs(output_dir)
-
-        cmd = [
-            "simplefold",
-            "--simplefold_model", model,
-            "--num_steps", str(num_steps),
-            "--tau", "0.01",
-            "--nsample_per_protein", "1",
-            "--plddt",
-            "--fasta_path", fasta_path,
-            "--output_dir", output_dir,
-            "--backend", "torch",
-        ]
-        print(f"[modal_backend] running: {' '.join(cmd)}")
-
-        # Stream stdout+stderr live so Modal logs show progress; otherwise a
-        # hang inside SimpleFold is invisible until the subprocess timeout fires.
-        start = time.monotonic()
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-            cwd=tmpdir,
+        rc, tail = _run_simplefold(
+            sequence=sequence,
+            model=model,
+            num_steps=num_steps,
+            tmpdir=tmpdir,
+            output_dir=output_dir,
         )
 
-        tail_lines: list[str] = []  # keep last N lines for the error path
-        def _pump():
-            assert proc.stdout is not None
-            for line in proc.stdout:
-                line = line.rstrip()
-                tail_lines.append(line)
-                if len(tail_lines) > 200:
-                    del tail_lines[: len(tail_lines) - 200]
-                print(f"[simplefold] {line}")
-
-        pump_thread = threading.Thread(target=_pump, daemon=True)
-        pump_thread.start()
-
-        SUBPROC_TIMEOUT = 1700  # leave ~100s buffer under the 1800s function timeout
-        try:
-            proc.wait(timeout=SUBPROC_TIMEOUT)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait(timeout=10)
-            pump_thread.join(timeout=5)
-            elapsed = time.monotonic() - start
+        if rc != 0:
             raise RuntimeError(
-                f"SimpleFold timed out after {elapsed:.0f}s "
-                f"(num_steps={num_steps}, seq_len={len(sequence)}).\n"
-                f"--- last output ---\n" + "\n".join(tail_lines[-50:])
+                f"SimpleFold error (exit {rc}):\n" + "\n".join(tail[-50:])
             )
 
-        pump_thread.join(timeout=5)
-        elapsed = time.monotonic() - start
-        print(f"[modal_backend] simplefold finished in {elapsed:.1f}s, exit={proc.returncode}")
-
-        if proc.returncode != 0:
-            raise RuntimeError(
-                f"SimpleFold error (code {proc.returncode}):\n"
-                + "\n".join(tail_lines[-50:])
-            )
-
-        # Walk the whole tmpdir (not just output_dir) — some versions write
-        # the structure next to the input FASTA or to CWD. Accept .pdb or .cif.
+        # SimpleFold writes either .pdb or .cif; look broadly.
         candidates = []
         for root, _, files in os.walk(tmpdir):
             for fname in files:
@@ -219,43 +230,32 @@ def fold_protein_modal(
                     candidates.append(os.path.join(root, fname))
 
         if not candidates:
-            # Build a directory tree so we can see what SimpleFold actually wrote.
-            listing_lines = []
-            for root, _, files in os.walk(tmpdir):
-                rel = os.path.relpath(root, tmpdir)
-                listing_lines.append(f"  {rel}/")
-                for fname in files:
-                    try:
-                        size = os.path.getsize(os.path.join(root, fname))
-                    except OSError:
-                        size = -1
-                    listing_lines.append(f"    {fname}  ({size} bytes)")
-            listing = "\n".join(listing_lines) or "  <empty>"
+            listing = "\n".join(
+                f"  {os.path.relpath(os.path.join(r, f), tmpdir)}"
+                for r, _, fs in os.walk(tmpdir) for f in fs
+            ) or "  <empty>"
             raise FileNotFoundError(
-                "No PDB/CIF file generated by SimpleFold.\n"
-                f"tmpdir contents:\n{listing}\n"
-                f"--- last stdout ---\n{(result.stdout or '')[-800:]}\n"
-                f"--- last stderr ---\n{(result.stderr or '')[-800:]}"
+                "No PDB/CIF file produced by SimpleFold.\n"
+                f"tmpdir contents:\n{listing}\n--- last output ---\n"
+                + "\n".join(tail[-30:])
             )
 
-        # Prefer PDB; fall back to converting CIF.
         candidates.sort(key=lambda p: 0 if p.lower().endswith(".pdb") else 1)
         chosen = candidates[0]
-        print(f"Using structure file: {chosen}")
+        print(f"[modal_backend] using structure file: {chosen}")
 
         if chosen.lower().endswith(".pdb"):
             with open(chosen) as pf:
                 pdb_string = pf.read()
         else:
-            # mmCIF → PDB via Biopython (already in the image).
             from Bio.PDB import MMCIFParser, PDBIO
             import io
             parser = MMCIFParser(QUIET=True)
-            structure = parser.get_structure("s", chosen)
+            struct = parser.get_structure("s", chosen)
             buf = io.StringIO()
-            io_writer = PDBIO()
-            io_writer.set_structure(structure)
-            io_writer.save(buf)
+            w = PDBIO()
+            w.set_structure(struct)
+            w.save(buf)
             pdb_string = buf.getvalue()
 
         scores = []
@@ -270,7 +270,7 @@ def fold_protein_modal(
         return {"pdb_string": pdb_string, "confidence": confidence, "model": model}
 
 
-# ── Convenience wrapper ────────────────────────────────────────────────────────
+# ── Convenience wrapper (called from app.py) ──────────────────────────────────
 
 def fold_on_modal(
     sequence: str,
