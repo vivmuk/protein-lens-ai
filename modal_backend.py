@@ -49,20 +49,29 @@ simplefold_image = (
 
 @app.function(
     image=simplefold_image,
-    gpu="T4",
-    timeout=1800,           # 30 min — enough for a full model download
+    gpu="A10G",             # same GPU as inference so pLDDT init exercises the full path
+    timeout=1800,
+    memory=16384,
     volumes={_MODEL_CACHE: model_vol},
 )
 def setup_weights(model: str = "simplefold_100M"):
     """
-    Run SimpleFold on a tiny sequence to trigger weight download into the volume.
-    Run this ONCE before your first inference call:
+    Run SimpleFold (with --plddt) on a tiny sequence to download BOTH the main
+    model and the pLDDT checkpoint into the volume.
 
         modal run modal_backend.py::setup_weights
     """
-    import subprocess, tempfile, os
+    import subprocess, tempfile, os, shutil
 
-    print(f"Downloading {model} weights into volume...")
+    # Wipe any half-finished checkpoints left over from a previous failed run
+    # so HF/torch re-downloads them cleanly.
+    for sub in ("huggingface", "torch", "simplefold"):
+        path = os.path.join(_MODEL_CACHE, sub)
+        if os.path.exists(path):
+            print(f"Clearing stale cache: {path}")
+            shutil.rmtree(path, ignore_errors=True)
+
+    print(f"Downloading {model} + pLDDT weights into volume...")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         fasta_path = os.path.join(tmpdir, "input.fasta")
@@ -76,7 +85,8 @@ def setup_weights(model: str = "simplefold_100M"):
             [
                 "simplefold",
                 "--simplefold_model", model,
-                "--num_steps", "10",           # minimum steps — we only need the download
+                "--num_steps", "50",
+                "--plddt",                     # CRITICAL — without this, pLDDT checkpoint is never downloaded
                 "--fasta_path", fasta_path,
                 "--output_dir", output_dir,
                 "--backend", "torch",
@@ -110,7 +120,7 @@ def setup_weights(model: str = "simplefold_100M"):
 def fold_protein_modal(
     sequence: str,
     model: str = "simplefold_100M",
-    num_steps: int = 500,
+    num_steps: int = 200,
 ) -> dict:
     import subprocess, tempfile, os
 

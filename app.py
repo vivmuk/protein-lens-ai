@@ -360,13 +360,35 @@ if st.session_state["sequence"] is None:
 # Header
 # ══════════════════════════════════════════════════════════════════════════════
 
-st.markdown("""
+_SUNDAI_LOGO = os.path.join(os.path.dirname(__file__), "assets", "sundai_club.png")
+_SUNDAI_URL = "https://sundai.club"
+
+import base64
+def _img_data_uri(path: str) -> str | None:
+    if not os.path.exists(path):
+        return None
+    with open(path, "rb") as f:
+        return "data:image/png;base64," + base64.b64encode(f.read()).decode()
+
+_sundai_uri = _img_data_uri(_SUNDAI_LOGO)
+_sundai_badge_html = (
+    f'<a href="{_SUNDAI_URL}" target="_blank" style="text-decoration:none;display:flex;'
+    f'align-items:center;gap:0.5rem;color:#8b949e;font-size:0.8rem;">'
+    f'<img src="{_sundai_uri}" alt="Sundai Club" style="height:32px;"/>'
+    f'<span>Developed at <strong style="color:#f5b400;">Sundai Club</strong></span></a>'
+    if _sundai_uri else
+    f'<a href="{_SUNDAI_URL}" target="_blank" style="text-decoration:none;color:#8b949e;'
+    f'font-size:0.85rem;">🍦 Developed at <strong style="color:#f5b400;">Sundai Club</strong></a>'
+)
+
+st.markdown(f"""
 <div class="header-banner">
   <div class="header-icon">🔬</div>
-  <div>
+  <div style="flex:1;">
     <h1>ProteinLens AI</h1>
     <p>AI-powered protein folding · 3D visualization · Scientific explanation · Medical Affairs mode</p>
   </div>
+  <div style="margin-left:auto;">{_sundai_badge_html}</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -472,19 +494,26 @@ with st.sidebar:
     st.markdown("## ⚙️ Folding Settings")
 
     if FOLDING_BACKEND in ("simplefold", "modal"):
-        model_size = st.selectbox(
-            "SimpleFold model size",
-            ["simplefold_100M", "simplefold_360M", "simplefold_700M"],
-            index=0,
-            help="Larger models = better accuracy but slower inference",
+        # Only the 100M model is pre-loaded in the Modal volume. Larger sizes
+        # would need separate downloads and don't fit on an A10G anyway.
+        model_size = "simplefold_100M"
+        st.markdown(
+            '<p style="color:#8b949e;font-size:0.85rem;margin:0 0 0.5rem 0;">'
+            'Model: <strong style="color:#58a6ff;">SimpleFold 100M</strong> '
+            '· diffusion flow-matching</p>',
+            unsafe_allow_html=True,
         )
         num_steps = st.slider(
-            "Inference steps",
-            100,
-            1000,
-            500,
-            100,
-            help="More steps = higher quality, slower",
+            "Denoising steps",
+            50,
+            300,
+            200,
+            50,
+            help=(
+                "SimpleFold is a diffusion model — it starts from noise and "
+                "iteratively denoises into a 3D structure. More steps = slightly "
+                "higher quality, linearly slower. 200 works well for the 100M model."
+            ),
         )
     else:
         model_size = "esm_default"
@@ -701,3 +730,28 @@ else:
                 st.session_state["protein_name"] = preset["name"]
                 st.session_state["selected_preset_id"] = preset["id"]
                 st.rerun()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Footer — Sundai Club attribution
+# ══════════════════════════════════════════════════════════════════════════════
+
+st.markdown("---")
+_footer_inner = (
+    f'<img src="{_sundai_uri}" alt="Sundai Club" style="height:56px;"/>'
+    if _sundai_uri else '<div style="font-size:2rem;">🍦</div>'
+)
+st.markdown(f"""
+<div style="text-align:center; padding: 2rem 1rem 3rem 1rem; color:#8b949e;">
+  <a href="{_SUNDAI_URL}" target="_blank" style="text-decoration:none; display:inline-flex;
+     flex-direction:column; align-items:center; gap:0.5rem; color:#8b949e;">
+    {_footer_inner}
+    <div style="font-size:0.95rem;">
+      Developed at <strong style="color:#f5b400; letter-spacing:0.5px;">SUNDAI CLUB</strong>
+    </div>
+    <div style="font-size:0.75rem; color:#6e7681;">
+      A community of builders shipping AI projects · sundai.club
+    </div>
+  </a>
+</div>
+""", unsafe_allow_html=True)
