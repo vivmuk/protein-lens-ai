@@ -1,0 +1,21 @@
+# ProteinLens AI — Python dependencies
+# Install with: pip install -r requirements.txt
+
+# ── Core UI ────────────────────────────────────────────────────────────────────
+streamlit>=1.32.0
+
+# ── 3D Visualization ───────────────────────────────────────────────────────────
+stmol>=0.0.9
+py3Dmol>=2.0.0
+
+# ── HTTP requests (Venice API, UniProt, ESMFold) ───────────────────────────────
+requests>=2.31.0
+
+# ── Scientific / bioinformatics utilities ─────────────────────────────────────
+biopython>=1.83          # FASTA parsing, sequence utilities
+
+# ── Modal cloud GPU backend (used automatically on Railway) ───────────────────
+modal>=0.62.0
+
+# ── Environment variable loading (.env support) ───────────────────────────────
+python-dotenv>=1.0.0
