@@ -2,7 +2,7 @@
 ProteinLens AI — Main Streamlit Application
 AI-powered protein folding, visualization, and scientific explanation.
 
-Atelier-style light UI with: 3D viewer (direct py3Dmol), sequence builder,
+Atelier-style light UI with: Mol* / py3Dmol 3D viewer, sequence builder,
 always-on sequence insights, per-residue pLDDT heatmap, and unknown-peptide
 AI explanations grounded in computed stats.
 """
@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import base64
 import html
+import json
 import os
 import time
+import urllib.parse
 from typing import Optional
 
 import streamlit as st
@@ -27,6 +29,13 @@ from aa_insights import (
 )
 from explanation import get_msl_summary, get_scientific_explanation
 from folding import FOLDING_BACKEND, fetch_uniprot_sequence, fold_sequence
+from protein_context import (
+    lookup_uniprot_metadata,
+    poll_interproscan,
+    public_context_for_prompt,
+    safe_fetch_public_context,
+    serializable_public_context,
+)
 from presets import (
     EXAMPLE_PROTEINS,
     find_preset_by_label,
@@ -64,6 +73,18 @@ RULE = "#E5E1DA"          # subtle dividers / pills
 PLDDT_HI = "#1d6b3a"      # green (>90)
 PLDDT_MID = "#9b7c1f"     # amber (70-90)
 PLDDT_LO = "#a83d2c"      # red (<70)
+MOLSTAR_VERSION = "5.4.2"
+MOLSTAR_JS_URL = f"https://cdn.jsdelivr.net/npm/molstar@{MOLSTAR_VERSION}/build/viewer/molstar.js"
+MOLSTAR_CSS_URL = f"https://cdn.jsdelivr.net/npm/molstar@{MOLSTAR_VERSION}/build/viewer/molstar.css"
+
+PRESET_PUBLIC_IDS = {
+    "insulin": {"uniprot_id": "P01308", "gene_symbol": "INS"},
+    "glp1": {"uniprot_id": "P01275", "gene_symbol": "GCG"},
+    "hemoglobin_alpha": {"uniprot_id": "P69905", "gene_symbol": "HBA1"},
+    "lysozyme": {"uniprot_id": "P00698", "gene_symbol": "LYZ"},
+    "egf": {"uniprot_id": "P01133", "gene_symbol": "EGF"},
+    "p53_dbd": {"uniprot_id": "P04637", "gene_symbol": "TP53"},
+}
 
 st.markdown(
     f"""
@@ -393,6 +414,54 @@ st.markdown(
       }}
 
       /* ── Info "?" toggle button ── */
+      /* Public annotation tracks */
+      .pl-domain-track, .pl-ss-track {{
+        position: relative; height: 24px; background: {RULE}; border-radius: 4px;
+        margin: 0.5rem 0 0.35rem 0; overflow: hidden;
+      }}
+      .pl-domain-marker, .pl-ss-marker {{
+        position: absolute; top: 0; height: 100%; border-radius: 3px;
+        min-width: 3px;
+      }}
+      .pl-context-grid {{
+        display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:0.85rem;
+      }}
+      .pl-context-card {{
+        background:{PAPER_2}; border:1px solid {RULE}; border-radius:8px;
+        padding:0.9rem 1rem; min-height:122px;
+      }}
+      .pl-context-title {{
+        font-family:'JetBrains Mono',monospace; font-size:0.72rem;
+        letter-spacing:0.07em; text-transform:uppercase; color:{INK_3};
+        margin-bottom:0.45rem;
+      }}
+      .pl-context-main {{
+        font-family:'EB Garamond',serif; font-size:1.18rem; line-height:1.2;
+        color:{INK}; margin-bottom:0.35rem;
+      }}
+      .pl-context-body {{
+        font-size:0.82rem; color:{INK_2}; line-height:1.45;
+      }}
+      .pl-download-bar {{
+        position: sticky; bottom: 0.75rem; z-index: 10;
+        display:flex; gap:0.55rem; flex-wrap:wrap; align-items:center;
+        background:rgba(255,255,255,0.94); border:1px solid {RULE};
+        border-radius:8px; padding:0.65rem; margin-top:1.25rem;
+        box-shadow:0 8px 24px rgba(0,0,0,0.08);
+        backdrop-filter: blur(8px);
+      }}
+      .pl-download-bar a {{
+        display:inline-flex; align-items:center; justify-content:center;
+        min-height:34px; padding:0.45rem 0.75rem; border:1px solid {RULE};
+        border-radius:7px; color:{INK}; text-decoration:none;
+        background:{PAPER_2}; font-size:0.82rem; font-weight:500;
+      }}
+      .pl-download-bar a:hover {{ border-color:{INK}; }}
+      @media (max-width: 900px) {{
+        .pl-context-grid {{ grid-template-columns:1fr; }}
+        .pl-download-bar {{ position: static; }}
+      }}
+
       .pl-info-btn {{
         display:inline-flex; align-items:center; justify-content:center;
         width: 16px; height: 16px; border-radius: 50%;
@@ -436,7 +505,14 @@ st.markdown(
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-def render_protein_3d(pdb_string: str, color_scheme: str, bg_color: str = "#FFFFFF") -> None:
+def render_protein_3d(
+    pdb_string: str,
+    color_scheme: str,
+    bg_color: str = "#FFFFFF",
+    surface_mode: str = "Off",
+    width: int = 820,
+    height: int = 480,
+) -> None:
     """Render py3Dmol view directly via components.html — no stmol dependency."""
     if not HAS_VIZ:
         st.warning(
@@ -446,7 +522,7 @@ def render_protein_3d(pdb_string: str, color_scheme: str, bg_color: str = "#FFFF
 
     # Larger fixed canvas + zoomTo() then center() so the molecule lands in the middle.
     # The components.html iframe matches the canvas width; we let it fill the card.
-    view = py3Dmol.view(width=820, height=480)
+    view = py3Dmol.view(width=width, height=height)
     view.addModel(pdb_string, "pdb")
 
     style_map = {
@@ -459,6 +535,13 @@ def render_protein_3d(pdb_string: str, color_scheme: str, bg_color: str = "#FFFF
         "Monochrome": {"cartoon": {"color": "#1a1a1a"}},
     }
     view.setStyle(style_map.get(color_scheme, {"cartoon": {"color": "spectrum"}}))
+    if surface_mode == "Hydrophobic surface":
+        view.addSurface(
+            py3Dmol.VDW,
+            {"opacity": 0.52, "colorscheme": "hydrophobicity"},
+        )
+    elif surface_mode == "Translucent surface":
+        view.addSurface(py3Dmol.VDW, {"opacity": 0.42, "color": "#d9d6ce"})
     view.setBackgroundColor(bg_color)
     view.zoomTo()
     # Wrap the iframe in a flex container so it self-centers inside the card.
@@ -467,7 +550,141 @@ def render_protein_3d(pdb_string: str, color_scheme: str, bg_color: str = "#FFFF
         f'<div style="display:flex;justify-content:center;align-items:center;width:100%;">'
         f'{raw_html}</div>'
     )
-    components.html(centered_html, height=500, scrolling=False)
+    components.html(centered_html, height=height + 20, scrolling=False)
+
+
+def render_molstar_3d(
+    pdb_string: str,
+    label: str,
+    width: int = 820,
+    height: int = 520,
+) -> None:
+    """Render the structure with Mol* JS for sharper WebGL molecular imaging."""
+    pdb_json = json.dumps(pdb_string)
+    label_json = json.dumps(label)
+    molstar_html = f"""
+    <!doctype html>
+    <html>
+      <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <link rel="stylesheet" type="text/css" href="{MOLSTAR_CSS_URL}" />
+        <script type="text/javascript" src="{MOLSTAR_JS_URL}"></script>
+        <style>
+          html, body {{
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #ffffff;
+          }}
+          #app {{
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            background: #ffffff;
+          }}
+          #molstar-status {{
+            position: absolute;
+            left: 14px;
+            bottom: 12px;
+            z-index: 20;
+            padding: 7px 10px;
+            border: 1px solid #E5E1DA;
+            border-radius: 7px;
+            background: rgba(255,255,255,0.92);
+            color: #52524c;
+            font-family: Inter, Arial, sans-serif;
+            font-size: 12px;
+          }}
+          .msp-plugin .msp-layout-main {{
+            border: 0 !important;
+          }}
+        </style>
+      </head>
+      <body>
+        <div id="app"></div>
+        <div id="molstar-status">Loading Mol*</div>
+        <script>
+          const pdbData = {pdb_json};
+          const dataLabel = {label_json};
+
+          async function bootMolstar() {{
+            const status = document.getElementById('molstar-status');
+            try {{
+              if (!window.molstar || !window.molstar.Viewer) {{
+                throw new Error('Mol* bundle did not load');
+              }}
+              const viewer = await molstar.Viewer.create('app', {{
+                layoutIsExpanded: false,
+                layoutShowControls: false,
+                layoutShowRemoteState: false,
+                layoutShowSequence: false,
+                layoutShowLog: false,
+                layoutShowLeftPanel: false,
+                collapseLeftPanel: true,
+                collapseRightPanel: true,
+                viewportShowControls: true,
+                viewportShowExpand: true,
+                viewportShowReset: true,
+                viewportShowSettings: true,
+                viewportShowScreenshotControls: true,
+                viewportShowSelectionMode: false,
+                viewportShowAnimation: false,
+                disableAntialiasing: false,
+                illumination: true,
+                pixelScale: Math.min(2, Math.max(1, window.devicePixelRatio || 1)),
+                pickScale: 0.5,
+                allowMajorPerformanceCaveat: true,
+                preferWebgl1: true,
+                viewportBackgroundColor: '#ffffff',
+                volumeStreamingDisabled: true,
+                pdbProvider: 'rcsb',
+                emdbProvider: 'rcsb'
+              }});
+
+              window.proteinLensMolstar = viewer;
+              await viewer.loadStructureFromData(pdbData, 'pdb', {{ dataLabel }});
+              viewer.plugin.canvas3d?.requestCameraReset();
+              if (status) status.remove();
+            }} catch (err) {{
+              if (status) {{
+                status.textContent = 'Mol* render failed: ' + (err?.message || err);
+                status.style.color = '#8a2a1a';
+              }}
+              console.error(err);
+            }}
+          }}
+
+          bootMolstar();
+        </script>
+      </body>
+    </html>
+    """
+    components.html(molstar_html, width=width, height=height, scrolling=False)
+
+
+def render_structure_viewer(
+    pdb_string: str,
+    color_scheme: str,
+    surface_mode: str,
+    viewer_engine: str,
+    label: str,
+    width: int = 820,
+    height: int = 480,
+) -> None:
+    if viewer_engine.startswith("Mol*"):
+        render_molstar_3d(pdb_string, label=label, width=width, height=height + 40)
+    else:
+        render_protein_3d(
+            pdb_string,
+            color_scheme=color_scheme,
+            surface_mode=surface_mode,
+            width=width,
+            height=height,
+        )
 
 
 def render_color_legend(color_scheme: str) -> str:
@@ -695,8 +912,8 @@ def render_motif_map(motifs: list[dict], seq_len: int) -> str:
         return ""
     markers = []
     for m in motifs[:30]:
-        left = (m["start"] / seq_len) * 100
-        width = max(0.4, ((m["end"] - m["start"]) / seq_len) * 100)
+        left = ((m["start"] - 1) / seq_len) * 100
+        width = max(0.4, ((m["end"] - m["start"] + 1) / seq_len) * 100)
         title = f"{m['name']} @ {m['start']+1}–{m['end']}  ({m['match']})"
         markers.append(
             f'<div class="pl-motif-marker" style="left:{left:.2f}%;width:{width:.2f}%;" '
@@ -707,6 +924,290 @@ def render_motif_map(motifs: list[dict], seq_len: int) -> str:
         f'<div class="pl-motif-track">{"".join(markers)}</div>'
         f'<div class="pl-motif-axis">'
         f'<span>1</span><span>{mid}</span><span>{seq_len}</span>'
+        f'</div>'
+    )
+
+
+DOMAIN_COLORS = [
+    "#4a7ba6", "#5b8c5a", "#b85a5a", "#7a5a8a", "#c4a35a",
+    "#4f8f8a", "#a45f45", "#6c6c96",
+]
+SS_COLORS = {"H": "#b85a5a", "E": "#c4a35a", "L": "#b8b4aa"}
+SS_LABELS = {"H": "helix", "E": "sheet", "L": "loop"}
+
+
+def render_domain_track(domains: list[dict], seq_len: int) -> str:
+    if seq_len <= 0:
+        return ""
+    markers = []
+    for i, domain in enumerate(domains[:40]):
+        start = max(1, int(domain.get("start", 1)))
+        end = min(seq_len, int(domain.get("end", start)))
+        left = ((start - 1) / seq_len) * 100
+        width = max(0.5, ((end - start + 1) / seq_len) * 100)
+        color = DOMAIN_COLORS[i % len(DOMAIN_COLORS)]
+        title = (
+            f"{domain.get('library') or 'InterPro'} {domain.get('name') or 'domain'} "
+            f"@ {start}-{end}"
+        )
+        markers.append(
+            f'<div class="pl-domain-marker" style="left:{left:.2f}%;width:{width:.2f}%;'
+            f'background:{color};" title="{html.escape(title)}"></div>'
+        )
+    mid = max(1, seq_len // 2)
+    return (
+        f'<div class="pl-domain-track">{"".join(markers)}</div>'
+        f'<div class="pl-motif-axis"><span>1</span><span>{mid}</span><span>{seq_len}</span></div>'
+    )
+
+
+def _residue_order_from_pdb(pdb_string: str) -> list[tuple[str, int]]:
+    order: list[tuple[str, int]] = []
+    seen: set[tuple[str, int]] = set()
+    for line in pdb_string.splitlines():
+        if not line.startswith(("ATOM", "HETATM")):
+            continue
+        try:
+            chain = line[21:22]
+            res_id = int(line[22:26].strip())
+        except ValueError:
+            continue
+        key = (chain, res_id)
+        if key not in seen:
+            seen.add(key)
+            order.append(key)
+    return order
+
+
+def extract_secondary_structure_states(pdb_string: str, seq_len: int) -> list[str]:
+    states = ["L"] * max(0, seq_len)
+    order = _residue_order_from_pdb(pdb_string)
+    index_by_residue = {key: i for i, key in enumerate(order)}
+
+    def mark_range(chain: str, start: int, end: int, state: str) -> None:
+        lo, hi = sorted((start, end))
+        for res_id in range(lo, hi + 1):
+            idx = index_by_residue.get((chain, res_id))
+            if idx is not None and idx < len(states):
+                states[idx] = state
+
+    for line in pdb_string.splitlines():
+        if line.startswith("HELIX"):
+            try:
+                chain = line[19:20].strip() or line[31:32].strip()
+                mark_range(chain, int(line[21:25].strip()), int(line[33:37].strip()), "H")
+            except ValueError:
+                continue
+        elif line.startswith("SHEET"):
+            try:
+                chain = line[21:22].strip() or line[32:33].strip()
+                mark_range(chain, int(line[22:26].strip()), int(line[33:37].strip()), "E")
+            except ValueError:
+                continue
+    return states
+
+
+def render_secondary_structure_ribbon(pdb_string: str, seq_len: int) -> str:
+    states = extract_secondary_structure_states(pdb_string, seq_len)
+    if not states:
+        return '<div class="pl-card-body">No residues available.</div>'
+
+    markers = []
+    start = 0
+    for i in range(1, len(states) + 1):
+        if i == len(states) or states[i] != states[start]:
+            state = states[start]
+            left = (start / len(states)) * 100
+            width = ((i - start) / len(states)) * 100
+            markers.append(
+                f'<div class="pl-ss-marker" style="left:{left:.2f}%;width:{width:.2f}%;'
+                f'background:{SS_COLORS[state]};" title="{SS_LABELS[state]} '
+                f'{start + 1}-{i}"></div>'
+            )
+            start = i
+
+    mid = max(1, len(states) // 2)
+    legend = (
+        f'<div style="display:flex;gap:1rem;margin-top:0.35rem;font-size:0.74rem;'
+        f'color:{INK_3};font-family:\'JetBrains Mono\',monospace;">'
+        f'<span><span style="display:inline-block;width:10px;height:10px;background:{SS_COLORS["H"]};'
+        f'border-radius:2px;margin-right:4px;"></span>helix</span>'
+        f'<span><span style="display:inline-block;width:10px;height:10px;background:{SS_COLORS["E"]};'
+        f'border-radius:2px;margin-right:4px;"></span>sheet</span>'
+        f'<span><span style="display:inline-block;width:10px;height:10px;background:{SS_COLORS["L"]};'
+        f'border-radius:2px;margin-right:4px;"></span>loop</span></div>'
+    )
+    return (
+        f'<div class="pl-ss-track">{"".join(markers)}</div>'
+        f'<div class="pl-motif-axis"><span>1</span><span>{mid}</span><span>{len(states)}</span></div>'
+        f"{legend}"
+    )
+
+
+def _wrap_fasta(sequence: str, width: int = 80) -> str:
+    return "\n".join(sequence[i:i + width] for i in range(0, len(sequence), width))
+
+
+def _file_stem(name: str) -> str:
+    safe = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in name.strip())
+    return safe.strip("_") or "proteinlens_structure"
+
+
+def _data_uri(text: str, mime: str) -> str:
+    encoded = base64.b64encode(text.encode("utf-8")).decode("ascii")
+    return f"data:{mime};base64,{encoded}"
+
+
+def build_insights_payload(
+    name: str,
+    sequence: str,
+    confidence: float | None,
+    stats: dict | None,
+    motifs: list[dict],
+    public_context: dict | None,
+) -> dict:
+    return {
+        "protein_name": name,
+        "sequence": sequence,
+        "sequence_length": len(sequence),
+        "confidence": confidence,
+        "sequence_stats": stats,
+        "motifs": motifs,
+        "public_context": serializable_public_context(public_context),
+    }
+
+
+def render_download_bar(
+    name: str,
+    sequence: str,
+    pdb_string: str,
+    confidence: float | None,
+    stats: dict | None,
+    motifs: list[dict],
+    public_context: dict | None,
+) -> str:
+    stem = _file_stem(name)
+    fasta = f">{name}\n{_wrap_fasta(sequence)}\n"
+    insights = json.dumps(
+        build_insights_payload(name, sequence, confidence, stats, motifs, public_context),
+        indent=2,
+    )
+    params = urllib.parse.urlencode({"name": name, "sequence": sequence})
+    share_href = f"?{params}"
+    links = [
+        ("PDB", _data_uri(pdb_string, "chemical/x-pdb"), f"{stem}.pdb", True),
+        ("FASTA", _data_uri(fasta, "text/plain"), f"{stem}.fasta", True),
+        ("Insights JSON", _data_uri(insights, "application/json"), f"{stem}_insights.json", True),
+        ("Share URL", share_href, "", False),
+    ]
+    anchors = []
+    for label, href, filename, is_download in links:
+        download = f' download="{html.escape(filename)}"' if is_download else ""
+        anchors.append(
+            f'<a href="{html.escape(href, quote=True)}"{download}>{html.escape(label)}</a>'
+        )
+    return f'<div class="pl-download-bar">{"".join(anchors)}</div>'
+
+
+def render_rcsb_context(rcsb: dict) -> str:
+    if rcsb.get("status") != "ok":
+        return _context_message("RCSB", rcsb.get("message") or rcsb.get("status") or "Unavailable")
+    hits = rcsb.get("hits") or []
+    if not hits:
+        return _context_message("RCSB", "No close experimental structures found.")
+    cards = []
+    for hit in hits[:3]:
+        identity = hit.get("identity_pct")
+        match = (
+            f'{identity:.1f}% over {hit.get("alignment_length")} residues'
+            if identity is not None and hit.get("alignment_length")
+            else "sequence-similar hit"
+        )
+        cards.append(
+            f'<div class="pl-context-card">'
+            f'<div class="pl-context-title">PDB {html.escape(hit.get("pdb_id", ""))}</div>'
+            f'<div class="pl-context-main">{html.escape(hit.get("title") or "Untitled structure")}</div>'
+            f'<div class="pl-context-body">{html.escape(hit.get("organism") or "organism unknown")}<br>'
+            f'{html.escape(hit.get("method") or "experimental method unknown")}<br>'
+            f'{html.escape(match)}</div></div>'
+        )
+    return f'<div class="pl-context-grid">{"".join(cards)}</div>'
+
+
+def render_open_targets_context(open_targets: dict) -> str:
+    if open_targets.get("status") != "ok":
+        return _context_message(
+            "Open Targets",
+            open_targets.get("message") or open_targets.get("status") or "No target match.",
+        )
+    target = open_targets.get("target") or {}
+    diseases = open_targets.get("diseases") or []
+    drugs = open_targets.get("drugs") or []
+    tractability = open_targets.get("tractability") or []
+    disease_rows = "".join(
+        f'<div style="display:flex;justify-content:space-between;gap:1rem;padding:0.35rem 0;'
+        f'border-bottom:1px dashed {RULE};font-size:0.84rem;">'
+        f'<span style="color:{INK_2};">{html.escape(d.get("name") or "")}</span>'
+        f'<span style="font-family:\'JetBrains Mono\',monospace;color:{INK};">{d.get("score", 0):.2f}</span></div>'
+        for d in diseases[:5]
+    )
+    drug_rows = "".join(
+        f'<div style="padding:0.35rem 0;border-bottom:1px dashed {RULE};font-size:0.84rem;">'
+        f'<span style="color:{INK};">{html.escape(d.get("name") or "")}</span>'
+        f'<span style="color:{INK_3};font-family:\'JetBrains Mono\',monospace;"> '
+        f'{html.escape(str(d.get("max_clinical_stage") or ""))}</span></div>'
+        for d in drugs[:5]
+    )
+    tract_text = ", ".join(
+        f'{t.get("label")} ({t.get("modality")})' for t in tractability[:4]
+    ) or "No positive tractability flags returned."
+    disease_block = disease_rows or '<p class="pl-card-body">None returned.</p>'
+    drug_block = drug_rows or '<p class="pl-card-body">None returned.</p>'
+    return (
+        f'<div class="pl-card">'
+        f'<div class="pl-card-num">OPEN TARGETS</div>'
+        f'<div class="pl-card-title" style="font-size:1.3rem;">'
+        f'{html.escape(target.get("symbol") or "")} - {html.escape(target.get("name") or "")}</div>'
+        f'<p class="pl-card-body" style="margin:0 0 0.75rem 0;">{html.escape(tract_text)}</p>'
+        f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:1.2rem;">'
+        f'<div><div class="pl-context-title">Disease links</div>{disease_block}</div>'
+        f'<div><div class="pl-context-title">Clinical candidates</div>{drug_block}</div>'
+        f'</div></div>'
+    )
+
+
+def render_alphafold_summary(alphafold: dict) -> str:
+    if alphafold.get("status") != "ok":
+        return _context_message(
+            "AlphaFold DB",
+            alphafold.get("message") or alphafold.get("status") or "No reference structure.",
+        )
+    comp = alphafold.get("comparison") or {}
+    if comp.get("status") == "ok":
+        compare = (
+            f'CA RMSD <strong>{comp.get("rmsd"):.2f} A</strong> over '
+            f'{comp.get("aligned_residues")} residues.'
+        )
+    else:
+        compare = html.escape(comp.get("message") or "RMSD not available for this sequence alignment.")
+    return (
+        f'<div class="pl-card">'
+        f'<div class="pl-card-num">ALPHAFOLD DB REFERENCE</div>'
+        f'<div class="pl-card-title" style="font-size:1.3rem;">'
+        f'{html.escape(alphafold.get("entry_id") or alphafold.get("uniprot_id") or "")}</div>'
+        f'<p class="pl-card-body" style="margin:0;">'
+        f'{html.escape(alphafold.get("description") or "")} '
+        f'v{html.escape(str(alphafold.get("latest_version") or ""))} - '
+        f'global pLDDT {html.escape(str(alphafold.get("global_plddt") or "n/a"))}. '
+        f'{compare}</p></div>'
+    )
+
+
+def _context_message(title: str, message: str) -> str:
+    return (
+        f'<div class="pl-card">'
+        f'<div class="pl-card-num">{html.escape(title.upper())}</div>'
+        f'<p class="pl-card-body" style="margin:0;">{html.escape(message)}</p>'
         f'</div>'
     )
 
@@ -763,18 +1264,44 @@ for key, default in [
     ("sequence", None),
     ("confidence", None),
     ("folded_sequence", None),
+    ("public_context", None),
+    ("uniprot_id", None),
+    ("gene_symbol", None),
     ("build_seq", ""),
     ("selected_preset_id", None),
     ("input_mode", "Quick examples"),
+    ("viewer_engine", "Mol* JS (high fidelity)"),
+    ("color_scheme", "Spectrum (Rainbow)"),
+    ("surface_mode", "Off"),
+    ("shared_query_loaded", False),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
+
+try:
+    qp = st.query_params
+    qp_sequence = qp.get("sequence")
+    if qp_sequence and not st.session_state["shared_query_loaded"]:
+        ok, cleaned = validate_sequence(qp_sequence)
+        if ok:
+            st.session_state["sequence"] = cleaned
+            st.session_state["protein_name"] = qp.get("name", "Shared protein")
+            st.session_state["input_mode"] = "Paste sequence"
+            st.session_state["selected_preset_id"] = None
+            st.session_state["uniprot_id"] = qp.get("uniprot_id") or None
+            st.session_state["gene_symbol"] = qp.get("gene_symbol") or None
+            st.session_state["shared_query_loaded"] = True
+except Exception:
+    pass
 
 if not st.session_state["sequence"]:
     _default = get_default_preset()
     st.session_state["sequence"] = _default["sequence"]
     st.session_state["protein_name"] = _default["name"]
     st.session_state["selected_preset_id"] = _default["id"]
+    _meta = PRESET_PUBLIC_IDS.get(_default["id"], {})
+    st.session_state["uniprot_id"] = _meta.get("uniprot_id")
+    st.session_state["gene_symbol"] = _meta.get("gene_symbol")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -815,6 +1342,9 @@ with st.sidebar:
             st.session_state["sequence"] = preset["sequence"]
             st.session_state["protein_name"] = preset["name"]
             st.session_state["selected_preset_id"] = preset["id"]
+            preset_meta = PRESET_PUBLIC_IDS.get(preset["id"], {})
+            st.session_state["uniprot_id"] = preset_meta.get("uniprot_id")
+            st.session_state["gene_symbol"] = preset_meta.get("gene_symbol")
             st.markdown(
                 f'<p style="font-size:0.83rem;color:{INK_2};line-height:1.5;">{preset["description"]}</p>',
                 unsafe_allow_html=True,
@@ -835,6 +1365,8 @@ with st.sidebar:
             if ok:
                 st.session_state["sequence"] = cleaned
                 st.session_state["protein_name"] = protein_name_input or "Unknown peptide"
+                st.session_state["uniprot_id"] = None
+                st.session_state["gene_symbol"] = None
 
     elif input_mode == "Search UniProt":
         query = st.text_input("Protein name", placeholder="e.g. insulin, BRCA1")
@@ -844,6 +1376,17 @@ with st.sidebar:
             if seq:
                 st.session_state["sequence"] = seq
                 st.session_state["protein_name"] = name
+                try:
+                    meta = lookup_uniprot_metadata(query, seq)
+                    if meta.get("status") == "ok":
+                        st.session_state["uniprot_id"] = meta.get("accession")
+                        st.session_state["gene_symbol"] = meta.get("gene_symbol")
+                    else:
+                        st.session_state["uniprot_id"] = None
+                        st.session_state["gene_symbol"] = None
+                except Exception:
+                    st.session_state["uniprot_id"] = None
+                    st.session_state["gene_symbol"] = None
                 st.success(f"Loaded **{name}** ({len(seq)} AA)")
             else:
                 st.error("Not found. Try a different name.")
@@ -890,6 +1433,8 @@ with st.sidebar:
         if len(st.session_state["build_seq"]) >= 10:
             st.session_state["sequence"] = st.session_state["build_seq"].upper()
             st.session_state["protein_name"] = protein_name_input or "Unknown peptide"
+            st.session_state["uniprot_id"] = None
+            st.session_state["gene_symbol"] = None
 
     st.markdown("---")
     st.markdown("## Folding")
@@ -907,11 +1452,26 @@ with st.sidebar:
         num_steps = 0
 
     st.markdown("## Visualization")
-    color_scheme = st.selectbox(
-        "Color scheme",
-        ["Spectrum (Rainbow)", "Confidence (pLDDT)", "Secondary Structure",
-         "Hydrophobicity", "Monochrome"],
+    viewer_engine = st.selectbox(
+        "Renderer",
+        ["Mol* JS (high fidelity)", "py3Dmol (style maps)"],
+        key="viewer_engine",
     )
+    if viewer_engine.startswith("Mol*"):
+        color_scheme = "Confidence (pLDDT)"
+        surface_mode = "Off"
+    else:
+        color_scheme = st.selectbox(
+            "Color scheme",
+            ["Spectrum (Rainbow)", "Confidence (pLDDT)", "Secondary Structure",
+             "Hydrophobicity", "Monochrome"],
+            key="color_scheme",
+        )
+        surface_mode = st.selectbox(
+            "Surface",
+            ["Off", "Hydrophobic surface", "Translucent surface"],
+            key="surface_mode",
+        )
 
     st.markdown("---")
     fold_clicked = st.button("⚡  Fold & analyze", type="primary", use_container_width=True)
@@ -1033,13 +1593,20 @@ with hero_right:
         f'{conf_pill}'
         f'<span class="pl-pill">{len(current_seq)} AA</span>'
         f'<span class="pl-pill">{html.escape(backend_label)}</span>'
+        f'<span class="pl-pill">{html.escape(viewer_engine.split(" ")[0])}</span>'
         f'<span class="pl-pill">{html.escape(color_scheme.lower())}</span>'
     )
     st.markdown(f'<div class="pl-pill-row">{pills_html}</div>', unsafe_allow_html=True)
 
     if has_fold:
-        render_protein_3d(st.session_state["pdb_string"], color_scheme=color_scheme)
-        legend_html = render_color_legend(color_scheme)
+        render_structure_viewer(
+            st.session_state["pdb_string"],
+            color_scheme=color_scheme,
+            surface_mode=surface_mode,
+            viewer_engine=viewer_engine,
+            label=current_name,
+        )
+        legend_html = "" if viewer_engine.startswith("Mol*") else render_color_legend(color_scheme)
         if legend_html:
             st.markdown(legend_html, unsafe_allow_html=True)
         st.markdown(
@@ -1100,6 +1667,9 @@ if fold_clicked:
     clean = result
     st.session_state["sequence"] = clean
     st.session_state["folded_sequence"] = clean
+    st.session_state["public_context"] = None
+    st.session_state["viewer_engine"] = "Mol* JS (high fidelity)"
+    st.session_state["color_scheme"] = "Confidence (pLDDT)"
     pname = current_name
 
     progress = st.progress(0, text="Initializing folding engine...")
@@ -1118,11 +1688,24 @@ if fold_clicked:
         framing = comparative_framing(stats)
         insights_block = format_for_prompt(stats, motifs, framing)
 
-        progress.progress(65, text="Generating scientific explanation...")
+        progress.progress(65, text="Fetching public protein context...")
+        public_context = safe_fetch_public_context(
+            clean,
+            protein_name=pname,
+            pdb_string=pdb_string,
+            uniprot_id=st.session_state.get("uniprot_id"),
+            gene_symbol=st.session_state.get("gene_symbol"),
+        )
+        st.session_state["public_context"] = public_context
+        public_context_block = public_context_for_prompt(public_context)
+        if public_context_block:
+            insights_block = f"{insights_block}\n{public_context_block}"
+
+        progress.progress(75, text="Generating scientific explanation...")
         st.session_state["explanation"] = get_scientific_explanation(
             clean, pname, confidence=confidence, insights_block=insights_block
         )
-        progress.progress(85, text="Generating MSL summary...")
+        progress.progress(90, text="Generating MSL summary...")
         st.session_state["msl_summary"] = get_msl_summary(
             clean, pname, confidence=confidence, insights_block=insights_block
         )
@@ -1155,6 +1738,21 @@ if current_seq and len(current_seq) >= 10:
     hydro_profile = kyte_doolittle_profile(current_seq, window=9)
 else:
     stats, motifs, framing, hydro_profile = None, [], "", []
+
+public_context = st.session_state.get("public_context") if has_fold else None
+if has_fold and stats:
+    st.markdown(
+        render_download_bar(
+            current_name,
+            current_seq,
+            st.session_state["pdb_string"],
+            st.session_state.get("confidence"),
+            stats,
+            motifs,
+            public_context,
+        ),
+        unsafe_allow_html=True,
+    )
 
 st.markdown('<div class="pl-tabs-wrap">', unsafe_allow_html=True)
 tab_overview, tab_sci, tab_msl, tab_how = st.tabs(
@@ -1308,6 +1906,83 @@ with tab_overview:
             )
 
         # ── Per-residue pLDDT (only if fold is current) ──
+        if has_fold and public_context:
+            st.markdown(
+                '<div class="pl-section-eyebrow">PUBLIC DATABASE CONTEXT</div>'
+                '<div class="pl-section-title">Known structures, domains, targets</div>',
+                unsafe_allow_html=True,
+            )
+            st.markdown(render_rcsb_context(public_context.get("rcsb", {})), unsafe_allow_html=True)
+
+            interpro = public_context.get("interpro", {})
+            domains = interpro.get("domains") or []
+            st.markdown(
+                f'<div class="pl-section-eyebrow" style="margin-top:1.5rem;">INTERPRO DOMAINS</div>'
+                f'<div class="pl-section-title">Pfam / SMART / PROSITE matches ({len(domains)})</div>',
+                unsafe_allow_html=True,
+            )
+            if domains:
+                st.markdown(render_domain_track(domains, len(current_seq)), unsafe_allow_html=True)
+                domain_rows = "".join(
+                    f'<div style="display:flex;justify-content:space-between;gap:1rem;padding:0.4rem 0;'
+                    f'border-bottom:1px dashed {RULE};font-size:0.86rem;">'
+                    f'<span style="color:{INK_2};">{html.escape(d.get("library") or "InterPro")} '
+                    f'{html.escape(d.get("name") or "domain")}</span>'
+                    f'<span style="color:{INK};font-family:\'JetBrains Mono\',monospace;">'
+                    f'{d.get("start")}-{d.get("end")}</span></div>'
+                    for d in domains[:12]
+                )
+                st.markdown(domain_rows, unsafe_allow_html=True)
+            elif interpro.get("status") == "pending":
+                st.info("InterProScan is still running.")
+                if st.button("Refresh InterPro domains", use_container_width=True):
+                    refreshed = poll_interproscan(interpro.get("job_id"), wait_seconds=20)
+                    st.session_state["public_context"]["interpro"] = refreshed
+                    st.rerun()
+            else:
+                st.markdown(
+                    _context_message(
+                        "InterPro",
+                        interpro.get("message") or "No Pfam, SMART, or PROSITE matches returned.",
+                    ),
+                    unsafe_allow_html=True,
+                )
+
+            st.markdown(
+                render_open_targets_context(public_context.get("open_targets", {})),
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                render_alphafold_summary(public_context.get("alphafold", {})),
+                unsafe_allow_html=True,
+            )
+
+            alphafold = public_context.get("alphafold", {})
+            if alphafold.get("status") == "ok" and alphafold.get("pdb_string"):
+                af_cols = st.columns(2, gap="medium")
+                with af_cols[0]:
+                    st.caption("ProteinLens prediction")
+                    render_structure_viewer(
+                        st.session_state["pdb_string"],
+                        color_scheme="Confidence (pLDDT)",
+                        surface_mode="Off",
+                        viewer_engine=viewer_engine,
+                        label=f"{current_name} prediction",
+                        width=430,
+                        height=300,
+                    )
+                with af_cols[1]:
+                    st.caption("AlphaFold DB reference")
+                    render_structure_viewer(
+                        alphafold["pdb_string"],
+                        color_scheme="Confidence (pLDDT)",
+                        surface_mode="Off",
+                        viewer_engine=viewer_engine,
+                        label=f"{current_name} AlphaFold DB",
+                        width=430,
+                        height=300,
+                    )
+
         if has_fold:
             st.markdown(
                 f'<div class="pl-section-eyebrow">PER-RESIDUE CONFIDENCE</div>'
@@ -1330,6 +2005,15 @@ with tab_overview:
                 f"</div>"
             )
             st.markdown(legend, unsafe_allow_html=True)
+            st.markdown(
+                f'<div class="pl-section-eyebrow" style="margin-top:1.4rem;">SECONDARY STRUCTURE</div>'
+                f'<div class="pl-section-title">Helix / sheet / loop strip</div>',
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                render_secondary_structure_ribbon(st.session_state["pdb_string"], len(current_seq)),
+                unsafe_allow_html=True,
+            )
 
         # ── Raw sequence (collapsed) ──
         with st.expander("Show full sequence"):
@@ -1545,7 +2229,10 @@ with tab_how:
                 Serverless GPU runtime; A10G containers with persistent volume cache.</p></div>
             <div><strong style="color:{INK};">py3Dmol</strong>
               <p style="font-size:0.85rem;color:{INK_2};margin:0.2rem 0;">
-                WebGL molecular viewer rendered via Streamlit components.</p></div>
+                Fast style-map and surface fallback viewer rendered via Streamlit components.</p></div>
+            <div><strong style="color:{INK};">Mol*</strong>
+              <p style="font-size:0.85rem;color:{INK_2};margin:0.2rem 0;">
+                High-fidelity JavaScript molecular graphics viewer used for primary rendering.</p></div>
             <div><strong style="color:{INK};">Biopython · ProtParam</strong>
               <p style="font-size:0.85rem;color:{INK_2};margin:0.2rem 0;">
                 MW, pI, ε280, instability, aromaticity. Industry reference.</p></div>
