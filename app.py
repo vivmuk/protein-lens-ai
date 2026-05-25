@@ -1274,6 +1274,7 @@ for key, default in [
     ("color_scheme", "Spectrum (Rainbow)"),
     ("surface_mode", "Off"),
     ("shared_query_loaded", False),
+    ("post_fold_color_scheme", None),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -1302,6 +1303,10 @@ if not st.session_state["sequence"]:
     _meta = PRESET_PUBLIC_IDS.get(_default["id"], {})
     st.session_state["uniprot_id"] = _meta.get("uniprot_id")
     st.session_state["gene_symbol"] = _meta.get("gene_symbol")
+
+if st.session_state.get("post_fold_color_scheme"):
+    st.session_state["color_scheme"] = st.session_state["post_fold_color_scheme"]
+    st.session_state["post_fold_color_scheme"] = None
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1668,8 +1673,8 @@ if fold_clicked:
     st.session_state["sequence"] = clean
     st.session_state["folded_sequence"] = clean
     st.session_state["public_context"] = None
-    st.session_state["viewer_engine"] = "Mol* JS (high fidelity)"
-    st.session_state["color_scheme"] = "Confidence (pLDDT)"
+    if not viewer_engine.startswith("Mol*"):
+        st.session_state["post_fold_color_scheme"] = "Confidence (pLDDT)"
     pname = current_name
 
     progress = st.progress(0, text="Initializing folding engine...")
