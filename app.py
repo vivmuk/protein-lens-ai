@@ -1323,6 +1323,15 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
 
+    _bk = st.text_input("🔑 Venice API key (BYOK)", type="password",
+                        help="Bring your own Venice key. Stored in this session only; falls back to the server key if empty.")
+    if _bk:
+        try:
+            from explanation import set_header_venice_key
+            set_header_venice_key(_bk)
+        except Exception:
+            pass
+
     st.markdown("## Input source")
     input_mode = st.radio(
         "Input method",

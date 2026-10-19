@@ -19,10 +19,18 @@ from typing import Optional
 import requests
 
 # ── Venice API config ──────────────────────────────────────────────────────────
-VENICE_API_KEY = os.environ.get(
-    "VENICE_API_KEY",
-    "VENICE_INFERENCE_KEY_KntgMduZd8nN5cxhGd99gD3a5HpqD142saxKSn0uOs",
-)
+VENICE_API_KEY = os.environ.get("VENICE_API_KEY", "")
+_HEADER_VENICE_KEY = None
+
+
+def set_header_venice_key(key):
+    """BYOK: visitor-supplied key overrides env for this request cycle."""
+    global _HEADER_VENICE_KEY
+    _HEADER_VENICE_KEY = key or None
+
+
+def get_venice_key():
+    return _HEADER_VENICE_KEY or VENICE_API_KEY
 VENICE_BASE_URL = "https://api.venice.ai/api/v1"
 VENICE_MODEL = "venice-uncensored"
 
